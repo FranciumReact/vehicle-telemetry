@@ -114,3 +114,15 @@ remains active so that late-joining receivers observe it.
 | 2     | BCM  |
 | 3     | ABS  |
 | 4–15  | Reserved |
+
+## Diagnostic Trouble Codes
+
+All codes are fictional and defined solely for this project.
+
+| Code  | Description                            | Severity |
+|-------|----------------------------------------|----------|
+| P0001 | Coolant temperature above limit        | Severe   |
+| P0002 | Battery voltage below limit            | Warning  |
+| P0003 | Engine RPM above limit                 | Critical |
+| P0004 | Sensor value outside physical range    | Warning  |
+| P0005 | Implausible rate of change             | Warning  |
