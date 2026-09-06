@@ -82,3 +82,35 @@ remains active so that late-joining receivers observe it.
 | DtcActive   | 18    | 1   | 1      | 0      | bool | 0–1       |
 | SourceEcu   | 19    | 4   | 1      | 0      | enum | 0–15      |
 | reserved    | 23    | 41  | —      | —      | —    | —         |
+
+## Enumerations
+
+### TransmissionState
+
+| Value | State    |
+|-------|----------|
+| 0     | Park     |
+| 1     | Reverse  |
+| 2     | Neutral  |
+| 3     | Drive    |
+| 4     | Sport    |
+| 5–7   | Reserved / invalid |
+
+### DtcSeverity
+
+| Value | Severity |
+|-------|----------|
+| 0     | Info     |
+| 1     | Warning  |
+| 2     | Severe   |
+| 3     | Critical |
+
+### SourceEcu
+
+| Value | ECU  |
+|-------|------|
+| 0     | ECM  |
+| 1     | TCM  |
+| 2     | BCM  |
+| 3     | ABS  |
+| 4–15  | Reserved |
