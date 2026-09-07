@@ -4,7 +4,7 @@
 
 // BrakePressed (1 bit at 24)
 // TransmissionState (3 bits at 0)
-
+// FuelRate (16 bits at 3)
 
 uint8_t encode_u8(double physical, double factor, double offset) {
     double scaled;
@@ -50,5 +50,12 @@ void set_bit(uint8_t* data, int bit_pos, bool value){
     } else {
         data[byte_index] &= ~(1 << bit_in_byte);
     }
-    
+}
+
+void set_bits(uint8_t* data, int start_bit, int lenght, uint32_t value){
+    for (int i = 0; i < lenght; i++){
+        // Extract bit i of value
+        bool bit = (value >> i) & 1;
+        set_bit(data, start_bit + i, bit);
+    }
 }
