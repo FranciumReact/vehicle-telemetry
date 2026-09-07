@@ -35,6 +35,26 @@ int main() {
     }
     printf("\n");
 
-    
+    CanFrame pt = build_powertrain_status(3, 25.0);
+    printf("powertrain frame -> ");
+    for (int i = 0; i < pt.dlc; i++) {
+        printf("%02X ", pt.data[i]);
+    }
+    printf("\n");
+
+    CanFrame bd = build_battery_data(12.6, 20.0);
+    printf("battery frame -> ");
+    for (int i = 0; i < bd.dlc; i++) {
+        printf("%02X ", bd.data[i]);
+    }
+    printf("\n");
+
+    CanFrame dg = build_diagnostic_data(0x0001, 2, true, 0);
+    printf("diagnostic frame -> ");
+    for (int i = 0; i < dg.dlc; i++) {
+        printf("%02X ", dg.data[i]);
+    }
+    printf("\n");
+
     return 0;
 }

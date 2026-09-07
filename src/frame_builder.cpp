@@ -1,5 +1,7 @@
 #include "frame_builder.hpp"
 #include "signal_encode.hpp"
+#include <cmath>
+
 
 CanFrame build_engine_data(double rpm, double throttle, double load, double coolant){
 
@@ -22,7 +24,6 @@ CanFrame build_vehicle_dynamics(double speed, double accel, bool brake){
 
     CanFrame f{};
 
-
     f.id = static_cast<uint32_t>(CanId::VehicleDynamics);
     f.dlc = 8;
     encode_u16_le(f.data, 0, speed, 0.01, 0.0); // VehicleSpeed which is bits 0-15
@@ -30,6 +31,41 @@ CanFrame build_vehicle_dynamics(double speed, double accel, bool brake){
     set_bit(f.data, 24, brake);
 
     return f;
-   
+}
 
+CanFrame build_battery_data(double voltage, double ambient){
+    CanFrame f{};
+
+    f.id = static_cast<uint32_t>(CanId::BatteryData);
+    f.dlc = 8;
+    encode_u16_le(f.data, 0, voltage, 0.01, 0.0); 
+    f.data[2] = encode_u8(ambient, 1.0, -40.0); 
+
+    return f;
+}
+
+CanFrame build_powertrain_status(uint8_t gear, double fuel_rate){
+
+    CanFrame f{};
+
+    f.id = static_cast<uint32_t>(CanId::PowertrainStatus);
+    f.dlc = 8;
+    set_bits(f.data, 0, 3, gear);
+    set_bits(f.data, 3, 16, static_cast<uint32_t>(std::lround(fuel_rate / 0.1)));
+
+    return f;
+}
+
+CanFrame build_diagnostic_data(uint16_t code, uint8_t severity, bool active, uint8_t source_ecu){
+    CanFrame f{};
+
+    f.id = static_cast<uint32_t>(CanId::DiagnosticData);
+    f.dlc = 8; 
+
+    set_bits(f.data, 0, 16, code);
+    set_bits(f.data, 16, 2, severity);
+    set_bit(f.data, 18, active);
+    set_bits(f.data, 19, 4, source_ecu);
+
+    return f;
 }
