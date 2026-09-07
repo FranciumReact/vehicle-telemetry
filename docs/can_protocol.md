@@ -126,3 +126,22 @@ All codes are fictional and defined solely for this project.
 | P0003 | Engine RPM above limit                 | Critical |
 | P0004 | Sensor value outside physical range    | Warning  |
 | P0005 | Implausible rate of change             | Warning  |
+
+## Design Decisions
+
+### Identifier assignment
+
+Lower ID's are higher priority and need to be handled first. This gives priority to low IDs. 0x300 for diagnostics is acceptable since diagnostics are not as severe as a problem in the breaks. Low ID win since during arbitration a dominant 0 overwrites a recessive 1, so the smaller ID survives bit by bit.
+
+### Cycle time selection
+
+RPM is able to change fast enough from idle to redline in less than a second, so slow cycles would completely miss the shape of the curve. Ambient temperature takes a longer time, for example : updating temp every 3 minutes. Cycle time accurately represents the rate of change. If there is over-sampling, there is a waste of bus bandwidth on redundent frames. 
+
+### Brake signal consolidation
+
+BrakePressed comes from the same ECU (ABS) on the same 10 ms cycle.
+Conserving bus bandwidth is necessary to improve the functionality. Insteads of using 8-bytes frame on one bit, grouping allows to conserve the bandwidth.
+
+### Reserved bits
+
+Reserve bits allow for change in the future or backward compatibility without interrupting operations.
