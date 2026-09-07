@@ -28,5 +28,13 @@ int main() {
     for (int i = 0; i < ef.dlc; i++) printf("%02X ", ef.data[i]);
     printf("\n");
 
+    CanFrame vd = build_vehicle_dynamics(100.0, 40.0, true);
+    printf("dynamics frame -> ");
+    for (int i = 0; i < vd.dlc; i++) {
+        printf("%02X ", vd.data[i]);
+    }
+    printf("\n");
+
+    
     return 0;
 }

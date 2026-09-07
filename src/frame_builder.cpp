@@ -17,3 +17,19 @@ CanFrame build_engine_data(double rpm, double throttle, double load, double cool
 
     return f;
 }
+
+CanFrame build_vehicle_dynamics(double speed, double accel, bool brake){
+
+    CanFrame f{};
+
+
+    f.id = static_cast<uint32_t>(CanId::VehicleDynamics);
+    f.dlc = 8;
+    encode_u16_le(f.data, 0, speed, 0.01, 0.0); // VehicleSpeed which is bits 0-15
+    f.data[2] = encode_u8(accel, 0.4, 0.0); // AcceleratorPos, bits 16-23
+    set_bit(f.data, 24, brake);
+
+    return f;
+   
+
+}
