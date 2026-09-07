@@ -19,3 +19,16 @@ uint8_t encode_u8(double physical, double factor, double offset) {
     // Casts to uint8_t
     return static_cast<uint8_t>(raw);
 }
+
+
+void encode_u16_le(uint8_t* data, int start_byte, double physical, double factor, double offset){
+    double scaled = (physical - offset) / factor;
+
+    long raw = std::lround(scaled);
+    raw = std::clamp(raw, 0L, 65535L);
+
+    // Little endian
+    data[start_byte] = static_cast<uint8_t>(raw & 0xFF);
+   
+    data[start_byte + 1] = static_cast<uint8_t>((raw >> 8) & 0xFF);
+}
