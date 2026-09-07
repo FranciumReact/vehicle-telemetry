@@ -1,4 +1,4 @@
-#include <cstdint>
+#include "signal_encode.hpp"
 #include <cmath>
 #include <algorithm>
 
