@@ -1,60 +1,16 @@
-#include "signal_encode.hpp"
-#include "frame_builder.hpp"
+
+#include "vehicle_model.hpp"
 #include <cstdio>
 
 int main() {
-    printf("throttle 50.0%% -> 0x%02X\n", encode_u8(50.0, 0.4, 0.0));
-    printf("throttle 33.0%% -> 0x%02X\n", encode_u8(33.0, 0.4, 0.0));
-    printf("coolant  65 C   -> 0x%02X\n", encode_u8(65.0, 1.0, -40.0));
-    printf("clamped  300%%   -> 0x%02X\n", encode_u8(300.0, 0.4, 0.0));
     
-    uint8_t buf[8] = {0};
-    encode_u16_le(buf, 0, 2000.0, 0.25, 0.0);
-    printf("rpm 2000 -> %02X %02X\n", buf[0], buf[1]);
-
-    
-    set_bit(buf, 24, true);
-    printf("brake set    -> %02X\n", buf[3]);
-    set_bit(buf, 24, false);
-    printf("brake clear  -> %02X\n", buf[3]);
-
-    uint8_t buf2[8] = {0};
-    set_bits(buf2, 0, 3, 3);        // TransmissionState = Drive
-    set_bits(buf2, 3, 16, 250);     // FuelRate = 25.0 L/h (raw 250)
-    printf("powertrain -> %02X %02X %02X\n", buf2[0], buf2[1], buf2[2]);
-
-    CanFrame ef = build_engine_data(2000.0, 50.0, 20.0, 65.0);
-    printf("engine frame -> ");
-    for (int i = 0; i < ef.dlc; i++) printf("%02X ", ef.data[i]);
-    printf("\n");
-
-    CanFrame vd = build_vehicle_dynamics(100.0, 40.0, true);
-    printf("dynamics frame -> ");
-    for (int i = 0; i < vd.dlc; i++) {
-        printf("%02X ", vd.data[i]);
+    // Run a vehicle simulation for 10 seconds
+    VehicleState s;
+    for (int i = 0; i < 10; i++) {
+        update_vehicle(s, 1.0);
+        printf("t=%2d speed=%6.1f rpm=%6.0f coolant=%5.1f\n",
+            i, s.speed_kmh, s.rpm, s.coolant_c);
     }
-    printf("\n");
-
-    CanFrame pt = build_powertrain_status(3, 25.0);
-    printf("powertrain frame -> ");
-    for (int i = 0; i < pt.dlc; i++) {
-        printf("%02X ", pt.data[i]);
-    }
-    printf("\n");
-
-    CanFrame bd = build_battery_data(12.6, 20.0);
-    printf("battery frame -> ");
-    for (int i = 0; i < bd.dlc; i++) {
-        printf("%02X ", bd.data[i]);
-    }
-    printf("\n");
-
-    CanFrame dg = build_diagnostic_data(0x0001, 2, true, 0);
-    printf("diagnostic frame -> ");
-    for (int i = 0; i < dg.dlc; i++) {
-        printf("%02X ", dg.data[i]);
-    }
-    printf("\n");
 
     return 0;
 }

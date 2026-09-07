@@ -9,6 +9,7 @@ add_compile_options(-Wall -Wextra)
 add_executable(encode_test
     src/signal_encode.cpp
     src/frame_builder.cpp
+    src/vehicle_model.cpp
     src/main.cpp
     
 )
