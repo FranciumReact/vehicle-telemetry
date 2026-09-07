@@ -8,7 +8,9 @@ add_compile_options(-Wall -Wextra)
 
 add_executable(encode_test
     src/signal_encode.cpp
+    src/frame_builder.cpp
     src/main.cpp
+    
 )
 
 target_include_directories(encode_test PRIVATE include)

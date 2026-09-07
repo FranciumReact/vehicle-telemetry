@@ -3,6 +3,13 @@
 
 #include <cstdint>
 
+// Single CAN frame seen by decoder: identifier, payload lenght
+// and up to 8 payload bytes. Fixed size buffer
+struct CanFrame {
+    uint32_t id;
+    uint8_t dlc;
+    uint8_t data[8];
+};
 // Create named set of CAN message IDs stored as 32-bit unsigned values, where each number is scoped
 // and wont implicitly convert to a number
 enum class CanId : uint32_t {

@@ -1,4 +1,5 @@
 #include "signal_encode.hpp"
+#include "frame_builder.hpp"
 #include <cstdio>
 
 int main() {
@@ -22,6 +23,10 @@ int main() {
     set_bits(buf2, 3, 16, 250);     // FuelRate = 25.0 L/h (raw 250)
     printf("powertrain -> %02X %02X %02X\n", buf2[0], buf2[1], buf2[2]);
 
+    CanFrame ef = build_engine_data(2000.0, 50.0, 20.0, 65.0);
+    printf("engine frame -> ");
+    for (int i = 0; i < ef.dlc; i++) printf("%02X ", ef.data[i]);
+    printf("\n");
 
     return 0;
 }
