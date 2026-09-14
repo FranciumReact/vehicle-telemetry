@@ -1,6 +1,7 @@
 #include "frame_builder.hpp"
 #include "vehicle_model.hpp"
 #include <cstdio>
+#include "can_decode.hpp"
 
 int main() {
     // Simulates 10 seconds of a vehicle driving, one tick per second.
@@ -29,6 +30,10 @@ int main() {
             printf("\n");
         }
     }
+    uint8_t buf[8] = {0x40, 0x1F, 0x7D, 0x32, 0x69, 0, 0, 0};
+    printf("rpm raw     = %u\n", extract_bits(buf, 0, 16));
+    printf("throttle raw= %u\n", extract_bits(buf, 16, 8));
+    printf("coolant raw = %u\n", extract_bits(buf, 32, 8));
 
     return 0;
 }

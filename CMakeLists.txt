@@ -12,6 +12,7 @@ add_executable(encode_test
     src/vehicle_model.cpp
     src/main.cpp
     src/signal_table.cpp
+    src/can_decode.cpp
     
 )
 
