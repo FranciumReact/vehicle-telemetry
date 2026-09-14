@@ -44,5 +44,16 @@ int main() {
         printf("%-12s = %8.2f %s\n",
             sig.name.c_str(), decode_signal(sig, buf), sig.unit.c_str());
     }
+
+    CanFrame test = build_engine_data(2000.0, 50.0, 20.0, 65.0);
+    auto decoded = decode_frame(test);
+
+    if (decoded.has_value()) {
+        for (const auto& [name, value] : decoded.value()) {
+            printf("%-12s = %8.2f\n", name.c_str(), value);
+        }
+    } else {
+        printf("decode failed\n");
+    }
     return 0;
 }

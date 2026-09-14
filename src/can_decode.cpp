@@ -19,3 +19,23 @@ double decode_signal(const SignalSpec& spec, const uint8_t* data) {
     uint32_t raw = extract_bits(data, spec.start_bit, spec.length);
     return raw * spec.factor + spec.offset;
 }
+
+std::optional<DecodedFrame> decode_frame(const CanFrame& frame) {
+    for (const MessageSpec& msg : get_message_table()) {
+        if (msg.id == frame.id) {
+            if (msg.dlc != frame.dlc){
+                return std::nullopt;
+            } else {
+                // Builds name to physical value map for the frame
+                DecodedFrame result;
+                for (const SignalSpec& sig : msg.signals) {
+                    // decode_signal applies factor/offset to raw bits
+                    result[sig.name] = decode_signal(sig, frame.data);
+                }
+                // Converts to std::optional
+                return result;
+            }
+        }
+    }
+    return std::nullopt;   // no matching ID
+}
