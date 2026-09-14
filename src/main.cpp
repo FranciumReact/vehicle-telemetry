@@ -1,69 +1,70 @@
 #include "frame_builder.hpp"
 #include "vehicle_model.hpp"
-#include <cstdio>
 #include "can_decode.hpp"
-#include "signal_table.hpp"
-
+#include "frame_queue.hpp"
+#include <cstdio>
+#include <thread>
+#include <chrono>
 
 int main() {
-    // Simulates 10 seconds of a vehicle driving, one tick per second.
-    // Every tick advances the physics, then packs the resulting state into
-    // CAN frames the same way real ECUs would broadcast it.
-    VehicleState s;   // starts stopped: 0 km/h, 800 rpm idle, 20 C coolant
+    // Shared between both threads. Handles its own locking internally,
+    // so neither thread has to think about mutexes.
+    FrameQueue q;
 
-    for (int i = 0; i < 10; i++) {
-        // Advance the model by 1 second. Passed by reference, so this
-        // mutates s directly instead of working on a copy.
-        update_vehicle(s, 1.0);
+    // PRODUCER THREAD
+    // Stands in for the vehicle's ECUs broadcasting onto the bus.
+    // [&] captures q by reference so the thread can push into it.
+    std::thread producer([&]{
+        VehicleState s;
 
-        // Each builder is a different ECU broadcasting what it owns.
-        // Physical units go in, packed 8-byte payloads come out.
-        CanFrame ef = build_engine_data(s.rpm, s.throttle_pct, s.load_pct, s.coolant_c);
-        CanFrame vd = build_vehicle_dynamics(s.speed_kmh, s.throttle_pct, s.brake);
-        CanFrame bd = build_battery_data(s.voltage_v, s.ambient_c);
-        CanFrame ps = build_powertrain_status(s.gear, s.fuel_lph);
+        // 500 ticks at 10 ms each = 5 seconds of simulated driving
+        for (int i = 0; i < 500; i++) {
+            update_vehicle(s, 0.01);
 
-        // Print them as a hexdump so we can read the bus by eye.
-        // In a real system these would go out over the wire, not to stdout.
-        CanFrame frames[4] = {ef, vd, bd, ps};
-        for (const CanFrame& f : frames) {
-            printf("[%2d] 0x%03X ", i, f.id);
-            for (int b = 0; b < f.dlc; b++) printf("%02X ", f.data[b]);
-            printf("\n");
+            q.push(build_engine_data(s.rpm, s.throttle_pct,
+                                     s.load_pct, s.coolant_c));
+
+            // Emit at the 10 ms cycle time the protocol spec defines,
+            // instead of running flat out. Without this the producer
+            // outruns the consumer and the queue drops most frames.
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-    }
-    uint8_t buf[8] = {0x40, 0x1F, 0x7D, 0x32, 0x69, 0, 0, 0};
-    printf("rpm raw     = %u\n", extract_bits(buf, 0, 16));
-    printf("throttle raw= %u\n", extract_bits(buf, 16, 8));
-    printf("coolant raw = %u\n", extract_bits(buf, 32, 8));
 
-    const auto& table = get_message_table();
-    const MessageSpec& msg = table[0];
+        // No more frames coming. Without this the consumer would
+        // block in pop() forever waiting for data that never arrives.
+        q.shutdown();
+    });
 
-    for (const SignalSpec& sig : msg.signals) {
-        printf("%-12s = %8.2f %s\n",
-            sig.name.c_str(), decode_signal(sig, buf), sig.unit.c_str());
-    }
+    // CONSUMER THREAD
+    // Stands in for the telemetry gateway reading the bus.
+    std::thread consumer([&]{
+        int decoded = 0;
 
-    CanFrame test = build_engine_data(2000.0, 50.0, 20.0, 65.0);
-    auto decoded = decode_frame(test);
+        // steady_clock never jumps backwards, unlike system_clock,
+        // so it's the right choice for measuring elapsed time.
+        auto start = std::chrono::steady_clock::now();
 
-    if (decoded.has_value()) {
-        for (const auto& [name, value] : decoded.value()) {
-            printf("%-12s = %8.2f\n", name.c_str(), value);
+        // pop() blocks while the queue is empty. It returns nullopt
+        // only once shutdown has been called AND the queue is drained.
+        while (auto frame = q.pop()) {
+            if (decode_frame(frame.value())) decoded++;
         }
-    } else {
-        printf("decode failed\n");
-    }
 
-    CanFrame bad_id = build_engine_data(2000, 50, 20, 65);
-    bad_id.id = 0x999;
-    printf("unknown id  -> %s\n",
-        decode_frame(bad_id).has_value() ? "decoded" : "rejected");
+        auto end = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                      end - start).count();
 
-    CanFrame bad_dlc = build_engine_data(2000, 50, 20, 65);
-    bad_dlc.dlc = 4;
-    printf("wrong dlc   -> %s\n",
-        decode_frame(bad_dlc).has_value() ? "decoded" : "rejected");
+        // NOTE: with the producer throttled to real time, this figure
+        // reflects the producer's rate, not the decoder's capacity.
+        // The capacity number comes from an unthrottled run.
+        printf("decoded %d frames in %lld us (%.0f frames/sec), dropped %llu\n",
+               decoded, (long long)us, decoded * 1000000.0 / us,
+               (unsigned long long)q.dropped());
+    });
+
+    // Wait for both threads to finish. Skipping this would let main
+    // return while they're still running, which terminates the program.
+    producer.join();
+    consumer.join();
     return 0;
 }
