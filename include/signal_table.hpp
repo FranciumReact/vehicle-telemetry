@@ -14,6 +14,8 @@ struct SignalSpec {
     double      max_value;
 };
 
+
+
 struct MessageSpec {
     uint32_t                id;
     std::string             name;
