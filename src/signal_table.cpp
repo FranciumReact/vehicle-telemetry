@@ -1,17 +1,49 @@
 #include "signal_table.hpp"
 
 // 0x100 Spec Table
-const std::vector<MessageSpec>& get_message_table() {
-    static const std::vector<MessageSpec> table = {
-        {
-            0x100, "ENGINE_DATA", 8,
-            {
-                {"EngineRPM",   0,  16, 0.25, 0.0,   "rpm", 0.0,   8000.0},
-                {"ThrottlePos", 16, 8,  0.4,  0.0,   "%",   0.0,   100.0},
-                {"EngineLoad",  24, 8,  0.4,  0.0,   "%",   0.0,   100.0},
-                {"CoolantTemp", 32, 8,  1.0,  -40.0, "C",   -40.0, 215.0},
-            }
-        },
-    };
-    return table;
+const std::vector<MessageSpec> &get_message_table() {
+  static const std::vector<MessageSpec> table = {
+      {0x100,
+       "ENGINE_DATA",
+       8,
+       {
+           {"EngineRPM", 0, 16, 0.25, 0.0, "rpm", 0.0, 8000.0},
+           {"ThrottlePos", 16, 8, 0.4, 0.0, "%", 0.0, 100.0},
+           {"EngineLoad", 24, 8, 0.4, 0.0, "%", 0.0, 100.0},
+           {"CoolantTemp", 32, 8, 1.0, -40.0, "C", -40.0, 215.0},
+       }},
+      {0x101,
+       "VEHICLE_DYNAMICS",
+       8,
+       {
+           {"VehicleSpeed", 0, 16, 0.01, 0.0, "km/h", 0.0, 300.0},
+           {"AcceleratorPos", 16, 8, 0.4, 0.0, "%", 0.0, 100.0},
+           {"BrakePressed", 24, 1, 1.0, 0.0, "bool", 0.0, 1.0},
+       }},
+      {0x102,
+       "BATTERY_DATA",
+       8,
+       {
+           {"BatteryVoltage", 0, 16, 0.01, 0.0, "V", 0.0, 20.0},
+           {"AmbientTemp", 16, 8, 1.0, -40.0, "C", -40.0, 80.0},
+       }},
+      {0x103,
+       "POWERTRAIN_STATUS",
+       8,
+       {
+           {"TransmissionState", 0, 3, 1.0, 0.0, "enum", 0.0, 4.0},
+           {"FuelRate", 3, 16, 0.1, 0.0, "L/h", 0.0, 60.0},
+
+       }},
+      {0x300,
+       "DIAGNOSTIC_DATA",
+       8,
+       {
+           {"DtcCode", 0, 16, 1.0, 0.0, "enum", 0.0, 65535.0},
+           {"DtcSeverity", 16, 2, 1.0, 0.0, "enum", 0.0, 3.0},
+           {"DtcActive", 18, 1, 1.0, 0.0, "bool", 0.0, 1.0},
+           {"SourceEcu", 19, 4, 1.0, 0.0, "enum", 0.0, 15.0},
+       }},
+  };
+  return table;
 }
