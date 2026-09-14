@@ -55,5 +55,15 @@ int main() {
     } else {
         printf("decode failed\n");
     }
+
+    CanFrame bad_id = build_engine_data(2000, 50, 20, 65);
+    bad_id.id = 0x999;
+    printf("unknown id  -> %s\n",
+        decode_frame(bad_id).has_value() ? "decoded" : "rejected");
+
+    CanFrame bad_dlc = build_engine_data(2000, 50, 20, 65);
+    bad_dlc.dlc = 4;
+    printf("wrong dlc   -> %s\n",
+        decode_frame(bad_dlc).has_value() ? "decoded" : "rejected");
     return 0;
 }
