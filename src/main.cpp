@@ -2,6 +2,8 @@
 #include "vehicle_model.hpp"
 #include <cstdio>
 #include "can_decode.hpp"
+#include "signal_table.hpp"
+
 
 int main() {
     // Simulates 10 seconds of a vehicle driving, one tick per second.
@@ -35,5 +37,12 @@ int main() {
     printf("throttle raw= %u\n", extract_bits(buf, 16, 8));
     printf("coolant raw = %u\n", extract_bits(buf, 32, 8));
 
+    const auto& table = get_message_table();
+    const MessageSpec& msg = table[0];
+
+    for (const SignalSpec& sig : msg.signals) {
+        printf("%-12s = %8.2f %s\n",
+            sig.name.c_str(), decode_signal(sig, buf), sig.unit.c_str());
+    }
     return 0;
 }

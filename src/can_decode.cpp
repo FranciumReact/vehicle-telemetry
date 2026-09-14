@@ -14,3 +14,8 @@ uint32_t extract_bits(const uint8_t* data, int start_bit, int length){
     }
     return result;
 }
+
+double decode_signal(const SignalSpec& spec, const uint8_t* data) {
+    uint32_t raw = extract_bits(data, spec.start_bit, spec.length);
+    return raw * spec.factor + spec.offset;
+}
