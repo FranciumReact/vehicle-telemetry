@@ -137,6 +137,10 @@ refused rather than silently decoded.
 - Classic CAN only: 11-bit identifiers, 8-byte payloads. No CAN FD.
 - Little-endian signals only, though the design allows byte order to be a
   per-signal property.
+- Rate-of-change validation is bounded by signal quantisation. A coarse
+  signal such as coolant temperature (1 °C steps at a 10 ms cycle) registers
+  a single step as 100 °C/sec, so meaningful rate limits below that are not
+  enforceable at this sample rate.
 
 ## Planned
 

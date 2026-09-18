@@ -1,6 +1,9 @@
 #include "signal_table.hpp"
 
 // 0x100 Spec Table
+// NOTE: temperature signals use a 1 C quantisation step. At a 10 ms sample
+// rate a single step registers as 100 C/sec, so any rate limit below that
+// fires on every step. Their max_rate is set above that floor accordingly.
 const std::vector<MessageSpec> &get_message_table() {
   static const std::vector<MessageSpec> table = {
       {0x100,
@@ -10,7 +13,7 @@ const std::vector<MessageSpec> &get_message_table() {
            {"EngineRPM", 0, 16, 0.25, 0.0, "rpm", 0.0, 8000.0,3000.0},
            {"ThrottlePos", 16, 8, 0.4, 0.0, "%", 0.0, 100.0, 200.0},
            {"EngineLoad", 24, 8, 0.4, 0.0, "%", 0.0, 100.0, 200.0},
-           {"CoolantTemp", 32, 8, 1.0, -40.0, "C", -40.0, 215.0, 2.0},
+           {"CoolantTemp", 32, 8, 1.0, -40.0, "C", -40.0, 215.0, 150.0},
        }},
       {0x101,
        "VEHICLE_DYNAMICS",
