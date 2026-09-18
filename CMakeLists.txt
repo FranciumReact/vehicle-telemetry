@@ -18,6 +18,7 @@ add_executable(encode_test
     src/frame_queue.cpp
     src/validation.cpp
     src/rate_validator.cpp
+    src/dtc_engine.cpp
 )
 target_include_directories(encode_test PRIVATE include)
 target_link_libraries(encode_test PRIVATE Threads::Threads)
@@ -30,5 +31,6 @@ add_executable(test_decode
     src/frame_builder.cpp
     src/validation.cpp
     src/rate_validator.cpp
+    src/dtc_engine.cpp
 )
 target_include_directories(test_decode PRIVATE include)
