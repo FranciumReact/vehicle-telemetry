@@ -24,16 +24,19 @@ int main() {
             update_vehicle(s, 0.01);
 
             q.push(build_engine_data(s.rpm, s.throttle_pct,
-                                     s.load_pct, s.coolant_c));
+                                    s.load_pct, s.coolant_c));
 
-            // Emit at the 10 ms cycle time the protocol spec defines,
-            // instead of running flat out. Without this the producer
-            // outruns the consumer and the queue drops most frames.
+            // Fault injection: every 100th tick, emit a frame with an
+            // impossible coolant reading to exercise the validator.
+            if (i % 100 == 0 && i > 0) {
+                q.push(build_engine_data(s.rpm, s.throttle_pct,
+                                        s.load_pct, 200.0));
+            }
+
+            // Emit at the 10 ms cycle time the protocol spec defines.
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
-        // No more frames coming. Without this the consumer would
-        // block in pop() forever waiting for data that never arrives.
         q.shutdown();
     });
 
