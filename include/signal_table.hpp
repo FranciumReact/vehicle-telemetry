@@ -12,6 +12,7 @@ struct SignalSpec {
     std::string unit;
     double      min_value;
     double      max_value;
+    double max_rate;   // maximum plausible change per second
 };
 
 

@@ -1,17 +1,17 @@
 #include "rate_validator.hpp"
 #include <cmath>
 
-ValidationResult RateValidator::check(const std::string& name,
+ValidationResult RateValidator::check(const SignalSpec& spec,
                                       double value, double time_s) {
-    auto it = history_.find(name);
+    auto it = history_.find(spec.name);
 
     if (it == history_.end()) {
-        // First sighting nothing to compare against yet.
-        history_[name] = {value, time_s};
+        // First sighting, nothing to compare against yet.
+        history_[spec.name] = {value, time_s};
         return ValidationResult::Ok;
     }
 
-    // work out how fast it changed.
+    // Work out how fast it changed.
     double dt = time_s - it->second.time_s;
     double dv = value - it->second.value;
 
@@ -22,6 +22,11 @@ ValidationResult RateValidator::check(const std::string& name,
 
     double rate = std::fabs(dv) / dt;
 
-    //compare rate against a per-signal limit
+    // Compare against this signal's plausible rate of change.
+    // The limit comes from the table, not from hardcoded logic here.
+    if (rate > spec.max_rate) {
+        return ValidationResult::ImplausibleRate;
+    }
+
     return ValidationResult::Ok;
 }
