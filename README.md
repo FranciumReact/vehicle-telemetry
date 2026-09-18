@@ -1,8 +1,9 @@
 # Vehicle Telemetry & Diagnostics Platform
 
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
-encoder/decoder, and a threaded processing pipeline. Built as a learning
-project to understand how vehicle networks and telemetry software work.
+encoder/decoder, and a threaded processing pipeline with validation and
+diagnostics. Built as a learning project to understand how vehicle networks
+and telemetry software work.
 
 **This is an educational project.** It is not affiliated with, endorsed by,
 or derived from any vehicle manufacturer. The CAN protocol is invented for
@@ -19,7 +20,7 @@ Rather than read about it, I built a simplified version end to end.
 
 ## Current status
 
-Milestones 1-5 of 13 complete.
+Milestones 1-6 of 13 complete.
 
 | Component | Status |
 |---|---|
@@ -28,22 +29,23 @@ Milestones 1-5 of 13 complete.
 | Vehicle model and frame generation | Done |
 | Table-driven decoder | Done |
 | Threaded processing pipeline | Done |
-| Validation and diagnostics | Not started |
+| Signal validation (range and rate) | Done |
+| Diagnostic trouble code engine | Done |
 | Database storage | Not started |
 | Web dashboard | Not started |
 | Python analytics | Not started |
 
-```
-Vehicle model  ->  Frame builders  ->  Bounded queue  ->  Decoder
- (physics)         (bit packing)       (thread-safe)     (table-driven)
-```
-
 ## Architecture
 
+```
+Vehicle model -> Frame builders -> Bounded queue -> Decoder -> Validation -> DTC engine
+  (physics)       (bit packing)    (thread-safe)  (table-driven)  (range/rate)  (debounced)
+```
+
 The producer thread simulates the vehicle and emits CAN frames at the cycle
-times defined in the protocol spec. The consumer thread decodes them. A
-bounded queue with a mutex and condition variable connects the two, so a
-slow consumer never stalls the producer.
+times defined in the protocol spec. The consumer thread decodes, validates,
+and runs diagnostics on them. A bounded queue with a mutex and condition
+variable connects the two, so a slow consumer never stalls the producer.
 
 ## The CAN protocol
 
@@ -58,11 +60,44 @@ Five messages, fully documented in [docs/can_protocol.md](docs/can_protocol.md).
 | 0x300 | DIAGNOSTIC_DATA | any | event-driven |
 
 Every signal specifies a start bit, length, scaling factor, offset, unit,
-and valid range. The decoder is driven entirely by this table — adding a
-signal requires no code changes.
+valid range, and maximum plausible rate of change. The decoder and both
+validators are driven entirely by this table — adding a signal requires no
+code changes.
 
 Signals are not all byte-aligned. FuelRate, for example, is 16 bits
 starting at bit 3, so it straddles three bytes.
+
+## Validation and diagnostics
+
+These are deliberately separate concerns.
+
+**Validation** asks whether a reading is physically possible. A coolant
+temperature of 200 °C is not a hot engine, it's a broken sensor. Range
+checks compare against per-signal bounds; rate checks compare against the
+previous reading and reject changes faster than the real world allows.
+
+**Diagnostics** ask whether the vehicle is behaving badly. A coolant
+temperature of 115 °C is a perfectly valid reading that indicates
+overheating. The data is trustworthy; the vehicle isn't.
+
+Diagnostic trouble codes are debounced: a condition must hold for 10
+consecutive cycles before a code is confirmed, and clear for 10 cycles
+before it heals. This mirrors how production ECUs avoid setting codes on a
+single noisy sample. Only state transitions are reported as events, not the
+ongoing condition.
+
+The difference shows in the output. A 15-frame injected overheat produces 15
+range violations, 2 rate violations (the jump in and the recovery), and
+exactly one confirmed DTC:
+
+```
+DTC P0001 SET at t=2.10
+DTC P0001 CLEARED at t=2.25
+decoded 500, out of range 15, implausible rate 2, dropped 0
+```
+
+Isolated single-frame spikes produce range violations but no DTC at all,
+which is the debouncing working as intended.
 
 ## Design decisions
 
@@ -83,6 +118,11 @@ counting the loss makes overload visible and survivable.
 **std::optional for fallible operations.** Decoding can fail on an unknown
 ID or a DLC mismatch. Returning an optional makes the failure explicit
 rather than smuggling it through a sentinel value.
+
+**Validation bounds are physical, not representational.** CoolantTemp can
+encode up to 215 °C, but its valid range stops at 130 °C. Using the encoding
+limit would mean validation only ever catches encoding errors, never sensor
+faults.
 
 ## Performance
 
@@ -111,7 +151,7 @@ Requires CMake 3.16+ and a C++17 compiler.
 mkdir -p build && cd build
 cmake ..
 make
-./encode_test    # runs a 5-second simulated drive cycle
+./encode_test    # runs a 5-second drive cycle with an injected fault
 ./test_decode    # runs the decoder tests
 ```
 
@@ -127,6 +167,9 @@ because an 8-bit field with factor 0.4 has 0.4% resolution.
 Rejection tests confirm that unknown identifiers and DLC mismatches are
 refused rather than silently decoded.
 
+Fault injection in the simulator exercises both validators and the DTC
+engine on every run.
+
 ## Limitations
 
 - Simulated CAN only. No hardware, no SocketCAN, no real vehicle data.
@@ -141,11 +184,13 @@ refused rather than silently decoded.
   signal such as coolant temperature (1 °C steps at a 10 ms cycle) registers
   a single step as 100 °C/sec, so meaningful rate limits below that are not
   enforceable at this sample rate.
+- The DTC engine detects threshold conditions in telemetry. It does not
+  diagnose mechanical faults and makes no predictive claims.
 
 ## Planned
 
-Validation against signal ranges, a diagnostic trouble code engine,
-PostgreSQL storage, a web dashboard, and Python-based anomaly detection.
+PostgreSQL storage for sessions and telemetry history, a web dashboard,
+Python-based statistical anomaly detection, containerisation, and CI.
 
 ## Repository layout
 
