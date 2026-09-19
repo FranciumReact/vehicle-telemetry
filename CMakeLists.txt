@@ -19,7 +19,9 @@ add_executable(encode_test
     src/validation.cpp
     src/rate_validator.cpp
     src/dtc_engine.cpp
+    src/telemetry_writer.cpp
 )
+target_link_libraries(encode_test PRIVATE pqxx pq)
 target_include_directories(encode_test PRIVATE include)
 target_link_libraries(encode_test PRIVATE Threads::Threads)
 
