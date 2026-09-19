@@ -5,9 +5,12 @@
 #include "validation.hpp"
 #include "rate_validator.hpp"
 #include "dtc_engine.hpp"
+#include "telemetry_writer.hpp"
 #include <cstdio>
 #include <thread>
 #include <chrono>
+#include <cstdlib>
+
 
 int main() {
     // Shared between both threads. Handles its own locking internally,
@@ -47,6 +50,11 @@ int main() {
         int decoded = 0, out_of_range = 0, bad_rate = 0;
         RateValidator rv;
         DtcEngine dtc;
+        // Connection string comes from the environment so a deployment can
+        // override it without a code change; falls back to the local default.
+        const char* conn = std::getenv("TELEMETRY_DB");
+        TelemetryWriter writer(conn ? conn : "dbname=vehicle_telemetry");
+        writer.start_session("SIM-001");
         double sim_time = 0.0;
 
         while (auto frame = q.pop()) {
@@ -80,6 +88,7 @@ int main() {
                 printf("  DTC %s %s at t=%.2f\n",
                        e.code.c_str(), e.active ? "SET" : "CLEARED", e.time_s);
             }
+            writer.add(*values, sim_time);
         }
 
         printf("decoded %d, out of range %d, implausible rate %d, dropped %llu\n",
