@@ -1,9 +1,9 @@
 # Vehicle Telemetry & Diagnostics Platform
 
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
-encoder/decoder, and a threaded processing pipeline with validation and
-diagnostics. Built as a learning project to understand how vehicle networks
-and telemetry software work.
+encoder/decoder, a threaded processing pipeline with validation and
+diagnostics, and PostgreSQL persistence. Built as a learning project to
+understand how vehicle networks and telemetry software work.
 
 **This is an educational project.** It is not affiliated with, endorsed by,
 or derived from any vehicle manufacturer. The CAN protocol is invented for
@@ -20,7 +20,7 @@ Rather than read about it, I built a simplified version end to end.
 
 ## Current status
 
-Milestones 1-6 of 13 complete.
+Milestones 1-7 of 13 complete.
 
 | Component | Status |
 |---|---|
@@ -31,21 +31,22 @@ Milestones 1-6 of 13 complete.
 | Threaded processing pipeline | Done |
 | Signal validation (range and rate) | Done |
 | Diagnostic trouble code engine | Done |
-| Database storage | Not started |
+| PostgreSQL storage | Done |
 | Web dashboard | Not started |
 | Python analytics | Not started |
 
 ## Architecture
 
 ```
-Vehicle model -> Frame builders -> Bounded queue -> Decoder -> Validation -> DTC engine
-  (physics)       (bit packing)    (thread-safe)  (table-driven)  (range/rate)  (debounced)
+Vehicle model -> Frame builders -> Bounded queue -> Decoder -> Validation -> DTC engine -> PostgreSQL
+  (physics)       (bit packing)    (thread-safe)  (table-driven)  (range/rate)  (debounced)   (batched)
 ```
 
 The producer thread simulates the vehicle and emits CAN frames at the cycle
 times defined in the protocol spec. The consumer thread decodes, validates,
-and runs diagnostics on them. A bounded queue with a mutex and condition
-variable connects the two, so a slow consumer never stalls the producer.
+runs diagnostics, and persists the result. A bounded queue with a mutex and
+condition variable connects the two, so a slow consumer never stalls the
+producer.
 
 ## The CAN protocol
 
@@ -99,6 +100,50 @@ decoded 500, out of range 15, implausible rate 2, dropped 0
 Isolated single-frame spikes produce range violations but no DTC at all,
 which is the debouncing working as intended.
 
+## Database schema
+
+Five tables: `sessions`, `signals`, `telemetry`, `dtc_catalog`, and
+`dtc_events`. Schema and seed data are in [database/](database/).
+
+**Normalized reference data.** `telemetry` stores a 4-byte integer
+`signal_id` rather than repeating the string `"EngineRPM"` on every row. At
+400 readings per second that string would be the majority of the table's
+size, and a typo such as `"EngineRPMM"` would silently create a phantom
+signal. The same reasoning puts DTC descriptions and severities in
+`dtc_catalog` instead of on every event row: the description of P0001 never
+changes, so it is stored once.
+
+**Foreign keys enforce integrity.** A telemetry row cannot reference a
+session that does not exist, and a DTC event cannot reference a code that
+is not in the catalog. Deleting a session with telemetry still attached is
+refused rather than silently orphaning rows.
+
+**Indexes match the query patterns.** The composite index on
+`telemetry(session_id, recorded_at)` serves the most common query — one
+session's data in time order — for both filtering and sorting. Column order
+matters: the reverse would not serve that query.
+
+**Key width chosen by expected row count.** `sessions.id` is `SERIAL`
+(32-bit), which is ample. `telemetry.id` is `BIGSERIAL`, because at 400
+rows/sec a 32-bit key would be exhausted in roughly two months of
+continuous logging.
+
+**TIMESTAMPTZ, not TIMESTAMP.** Vehicles cross time zones. Storing an
+absolute instant keeps data from different regions comparable.
+
+Reassembling the normalized data is a join:
+
+```sql
+SELECT s.name, avg(t.value), min(t.value), max(t.value)
+FROM telemetry t
+JOIN signals s ON s.id = t.signal_id
+WHERE t.session_id = 1
+GROUP BY s.name;
+```
+
+That is the trade-off: a small read-time cost in exchange for a large
+write-time and storage saving.
+
 ## Design decisions
 
 **Table-driven decoding.** Signal parameters live in one data structure
@@ -124,6 +169,21 @@ encode up to 215 °C, but its valid range stops at 130 °C. Using the encoding
 limit would mean validation only ever catches encoding errors, never sensor
 faults.
 
+**Batched database writes.** Readings are buffered and written 100 at a
+time in one transaction rather than one INSERT per reading. A per-reading
+insert costs a network round trip, a transaction commit, and a disk flush;
+batching amortises all three. The cost is durability — up to one batch can
+be lost on a crash — which is acceptable for 100 Hz samples where the next
+one arrives in 10 ms, and would not be for financial data.
+
+**RAII for database lifetime.** The writer's destructor flushes the buffer
+and closes the session, so no code path can exit without the data being
+written and `ended_at` being set.
+
+**Parameterised queries throughout.** Values are sent separately from the
+SQL text, so they can never be interpreted as SQL. No query in this project
+is built by string concatenation.
+
 ## Performance
 
 Measured on a 13th Gen Intel Core i9-13900H (WSL2, Ubuntu), single producer
@@ -145,7 +205,23 @@ arbitration latency degrades as load approaches the limit.
 
 ## Building
 
-Requires CMake 3.16+ and a C++17 compiler.
+Requires CMake 3.16+, a C++17 compiler, PostgreSQL, and libpqxx.
+
+```bash
+sudo apt install build-essential cmake postgresql libpqxx-dev
+```
+
+Set up the database:
+
+```bash
+sudo service postgresql start
+sudo -u postgres createuser --superuser "$USER"
+sudo -u postgres createdb vehicle_telemetry --owner "$USER"
+psql -d vehicle_telemetry -f database/schema.sql
+psql -d vehicle_telemetry -f database/seed.sql
+```
+
+Build and run:
 
 ```bash
 mkdir -p build && cd build
@@ -155,7 +231,8 @@ make
 ./test_decode    # runs the decoder tests
 ```
 
-Built with `-Wall -Wextra -Werror`.
+Built with `-Wall -Wextra -Werror`. The connection string is read from
+`TELEMETRY_DB` and falls back to `dbname=vehicle_telemetry`.
 
 ## Testing
 
@@ -186,11 +263,18 @@ engine on every run.
   enforceable at this sample rate.
 - The DTC engine detects threshold conditions in telemetry. It does not
   diagnose mechanical faults and makes no predictive claims.
+- `recorded_at` and `occurred_at` use database ingestion time, not vehicle
+  time. A real system would store both, since replay or faster-than-realtime
+  processing makes the two diverge.
+- `flush()` issues one statement per buffered row inside a single
+  transaction. A single multi-row INSERT would be faster still.
+- Validation failures are counted but not persisted. Only their aggregate
+  effect on DTCs reaches the database.
 
 ## Planned
 
-PostgreSQL storage for sessions and telemetry history, a web dashboard,
-Python-based statistical anomaly detection, containerisation, and CI.
+A web dashboard, Python-based statistical anomaly detection,
+containerisation, and CI.
 
 ## Repository layout
 
@@ -198,5 +282,6 @@ Python-based statistical anomaly detection, containerisation, and CI.
 include/     headers
 src/         implementation
 tests/       unit tests
+database/    schema and seed SQL
 docs/        protocol specification
 ```
