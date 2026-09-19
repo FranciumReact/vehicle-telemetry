@@ -1,4 +1,5 @@
 #include "telemetry_writer.hpp"
+#include <cstdio>
 
 TelemetryWriter::TelemetryWriter(const std::string& conn_string)
     : conn_(conn_string) {
@@ -13,11 +14,15 @@ TelemetryWriter::TelemetryWriter(const std::string& conn_string)
 }
 
 TelemetryWriter::~TelemetryWriter() {
-    // RAII: whatever is still buffered gets written before we die.
+    // RAII: whatever is still buffered gets written, and the session is
+    // closed, before we die.
     try {
         flush();
-    } catch (...) {
-        // A destructor must never throw.
+        end_session();
+    } catch (const std::exception& e) {
+        // A destructor must never throw, but failing silently loses data
+        // with no trace, so at least report it.
+        fprintf(stderr, "TelemetryWriter shutdown failed: %s\n", e.what());
     }
 }
 
@@ -60,4 +65,24 @@ void TelemetryWriter::flush() {
 
     tx.commit();
     buffer_.clear();
+}
+
+void TelemetryWriter::end_session() {
+    pqxx::work tx(conn_);
+    // your exec_params call here
+    tx.exec_params(
+        "UPDATE sessions SET ended_at = now() WHERE id = $1",
+        session_id_
+    );
+    tx.commit();
+}
+
+void TelemetryWriter::log_dtc(const std::string& code, bool active) {
+    pqxx::work tx(conn_);
+    tx.exec_params(
+        "INSERT INTO dtc_events (session_id, code, active, occurred_at) "
+        "VALUES ($1, $2, $3, now())",
+        session_id_, code, active
+    );
+    tx.commit();
 }

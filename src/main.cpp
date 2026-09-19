@@ -87,6 +87,7 @@ int main() {
             for (const DtcEvent& e : dtc.update(*values, sim_time)) {
                 printf("  DTC %s %s at t=%.2f\n",
                        e.code.c_str(), e.active ? "SET" : "CLEARED", e.time_s);
+                writer.log_dtc(e.code, e.active);
             }
             writer.add(*values, sim_time);
         }

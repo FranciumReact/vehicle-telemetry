@@ -13,6 +13,8 @@ public:
     int  start_session(const std::string& vehicle_id);
     void add(const DecodedFrame& values, double time_s);
     void flush();
+    void end_session();
+    void log_dtc(const std::string& code, bool active);
 
 private:
     pqxx::connection conn_;
