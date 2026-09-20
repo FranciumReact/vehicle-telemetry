@@ -2,12 +2,18 @@
 
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
 encoder/decoder, a threaded processing pipeline with validation and
-diagnostics, and PostgreSQL persistence. Built as a learning project to
-understand how vehicle networks and telemetry software work.
+diagnostics, PostgreSQL persistence, and a live web dashboard. Built as a
+learning project to understand how vehicle networks and telemetry software
+work.
 
 **This is an educational project.** It is not affiliated with, endorsed by,
 or derived from any vehicle manufacturer. The CAN protocol is invented for
 this project. No real vehicle data or proprietary specification is used.
+
+![Live telemetry dashboard](docs/dashboard.png)
+
+[**Demo video**](https://youtu.be/2TDl8FXRYqo) — the pipeline running, the
+dashboard updating live, and an injected coolant fault triggering DTC P0001.
 
 ## Motivation
 
@@ -20,7 +26,7 @@ Rather than read about it, I built a simplified version end to end.
 
 ## Current status
 
-Milestones 1-7 of 13 complete.
+Milestones 1-8 of 13 complete.
 
 | Component | Status |
 |---|---|
@@ -32,14 +38,19 @@ Milestones 1-7 of 13 complete.
 | Signal validation (range and rate) | Done |
 | Diagnostic trouble code engine | Done |
 | PostgreSQL storage | Done |
-| Web dashboard | Not started |
+| Web dashboard | Done |
 | Python analytics | Not started |
+| Anomaly detection | Not started |
+| Containerisation and CI | Not started |
 
 ## Architecture
 
 ```
 Vehicle model -> Frame builders -> Bounded queue -> Decoder -> Validation -> DTC engine -> PostgreSQL
-  (physics)       (bit packing)    (thread-safe)  (table-driven)  (range/rate)  (debounced)   (batched)
+  (physics)       (bit packing)    (thread-safe)  (table-driven)  (range/rate)  (debounced)      |
+                                                                                                 v
+                                                                                  Flask API -> Dashboard
+                                                                                   (JSON)       (browser)
 ```
 
 The producer thread simulates the vehicle and emits CAN frames at the cycle
@@ -47,6 +58,10 @@ times defined in the protocol spec. The consumer thread decodes, validates,
 runs diagnostics, and persists the result. A bounded queue with a mutex and
 condition variable connects the two, so a slow consumer never stalls the
 producer.
+
+The dashboard is a separate process that reads from PostgreSQL. It never
+talks to the C++ pipeline directly — the database is the handoff point,
+which is how real telemetry systems keep ingestion and query independent.
 
 ## The CAN protocol
 
@@ -131,6 +146,10 @@ continuous logging.
 **TIMESTAMPTZ, not TIMESTAMP.** Vehicles cross time zones. Storing an
 absolute instant keeps data from different regions comparable.
 
+**A nullable column carries meaning.** `sessions.ended_at` is NULL while a
+session is still recording. That single column is what lets the dashboard
+distinguish a live run from a historical one, without any extra state.
+
 Reassembling the normalized data is a join:
 
 ```sql
@@ -143,6 +162,28 @@ GROUP BY s.name;
 
 That is the trade-off: a small read-time cost in exchange for a large
 write-time and storage saving.
+
+## Dashboard
+
+A Flask backend serves JSON from PostgreSQL; a single static HTML page polls
+it once a second and renders the current value of every signal.
+
+**Polling rather than WebSocket.** At a 1 Hz refresh the two are
+indistinguishable to the eye, and polling is stateless, far less code, and
+has no reconnection logic to get wrong. WebSocket would earn its complexity
+at higher update rates or with many concurrent clients; here it would not.
+
+**Live and historical look different.** The page reads `session.live`, which
+the API derives from `ended_at IS NULL`. A finished session shows its end
+time instead of a live indicator.
+
+**Failure looks different from idle.** If the fetch throws, the page says so
+rather than leaving stale numbers on screen. A dashboard showing nothing and
+a dashboard that is broken must not look the same to the person reading it.
+
+**Latest value per signal in one query.** Postgres `DISTINCT ON (s.name)`
+with `ORDER BY s.name, t.recorded_at DESC` returns the most recent row for
+each signal in a single round trip, rather than one query per signal.
 
 ## Design decisions
 
@@ -182,7 +223,7 @@ written and `ended_at` being set.
 
 **Parameterised queries throughout.** Values are sent separately from the
 SQL text, so they can never be interpreted as SQL. No query in this project
-is built by string concatenation.
+is built by string concatenation, on either the C++ or the Python side.
 
 ## Performance
 
@@ -203,12 +244,12 @@ included. At 500 kbit/s that puts the theoretical ceiling near 4,000 frames
 per second, and real buses are typically run well below saturation because
 arbitration latency degrades as load approaches the limit.
 
-## Building
+## Building and running
 
-Requires CMake 3.16+, a C++17 compiler, PostgreSQL, and libpqxx.
+Requires CMake 3.16+, a C++17 compiler, PostgreSQL, libpqxx, and Python 3.
 
 ```bash
-sudo apt install build-essential cmake postgresql libpqxx-dev
+sudo apt install build-essential cmake postgresql libpqxx-dev python3-venv
 ```
 
 Set up the database:
@@ -221,18 +262,28 @@ psql -d vehicle_telemetry -f database/schema.sql
 psql -d vehicle_telemetry -f database/seed.sql
 ```
 
-Build and run:
+Build and run the pipeline:
 
 ```bash
 mkdir -p build && cd build
 cmake ..
 make
-./encode_test    # runs a 5-second drive cycle with an injected fault
-./test_decode    # runs the decoder tests
+./encode_test    # 30-second drive cycle with an injected fault
+./test_decode    # decoder tests
+```
+
+Run the dashboard in a second terminal, then open http://localhost:5000:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install flask psycopg2-binary
+python dashboard/app.py
 ```
 
 Built with `-Wall -Wextra -Werror`. The connection string is read from
-`TELEMETRY_DB` and falls back to `dbname=vehicle_telemetry`.
+`TELEMETRY_DB` on both the C++ and Python sides, falling back to
+`dbname=vehicle_telemetry`.
 
 ## Testing
 
@@ -270,11 +321,16 @@ engine on every run.
   transaction. A single multi-row INSERT would be faster still.
 - Validation failures are counted but not persisted. Only their aggregate
   effect on DTCs reaches the database.
+- The dashboard runs on Flask's development server, which is single-threaded
+  and not suitable for deployment. It also shows only current values; there
+  are no historical charts yet.
+- There is no authentication on the API. It is bound to localhost and
+  assumes a trusted local environment.
 
 ## Planned
 
-A web dashboard, Python-based statistical anomaly detection,
-containerisation, and CI.
+Python analytics over stored sessions, statistical anomaly detection,
+historical charts on the dashboard, containerisation, and CI.
 
 ## Repository layout
 
@@ -283,5 +339,6 @@ include/     headers
 src/         implementation
 tests/       unit tests
 database/    schema and seed SQL
-docs/        protocol specification
+dashboard/   Flask API and static page
+docs/        protocol specification and screenshots
 ```

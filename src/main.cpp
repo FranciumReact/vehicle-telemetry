@@ -23,15 +23,19 @@ int main() {
     std::thread producer([&]{
         VehicleState s;
 
-        // 500 ticks at 10 ms each = 5 seconds of simulated driving
-        for (int i = 0; i < 500; i++) {
+        // 3000 ticks at 10 ms each = 30 seconds of simulated driving.
+        // Long enough to actually watch the dashboard update, rather than
+        // being over before the 1 Hz poll has fired twice.
+        for (int i = 0; i < 3000; i++) {
             update_vehicle(s, 0.01);
 
-            // Fault injection: a sustained overheat between ticks 200 and 215.
-            // This REPLACES the real reading rather than adding a second frame.
-            // Interleaving good and bad frames would reset the DTC engine's
-            // fail counter every other cycle, so it would never confirm.
-            double coolant = (i >= 200 && i < 215) ? 200.0 : s.coolant_c;
+            // Fault injection: a sustained overheat between ticks 1500 and
+            // 1700, so it lands halfway through the run instead of at the
+            // start. This REPLACES the real reading rather than adding a
+            // second frame — interleaving good and bad frames would reset
+            // the DTC engine's fail counter every other cycle, so it would
+            // never confirm.
+            double coolant = (i >= 1500 && i < 1700) ? 200.0 : s.coolant_c;
 
             q.push(build_engine_data(s.rpm, s.throttle_pct,
                                      s.load_pct, coolant));
