@@ -10,7 +10,7 @@ const std::vector<MessageSpec> &get_message_table() {
        "ENGINE_DATA",
        8,
        {
-           {"EngineRPM", 0, 16, 0.25, 0.0, "rpm", 0.0, 8000.0,3000.0},
+           {"EngineRPM", 0, 16, 0.5, 0.0, "rpm", 0.0, 8000.0,3000.0},
            {"ThrottlePos", 16, 8, 0.4, 0.0, "%", 0.0, 100.0, 200.0},
            {"EngineLoad", 24, 8, 0.4, 0.0, "%", 0.0, 100.0, 200.0},
            {"CoolantTemp", 32, 8, 1.0, -40.0, "C", -40.0, 130.0, 150.0},
