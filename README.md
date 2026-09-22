@@ -4,9 +4,9 @@
 
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
 encoder/decoder, a threaded processing pipeline with validation and
-diagnostics, PostgreSQL persistence, and a live web dashboard. Built as a
-learning project to understand how vehicle networks and telemetry software
-work.
+diagnostics, PostgreSQL persistence, and a live web dashboard, containerised
+with Docker Compose and built and tested in CI. Built as a learning project to
+understand how vehicle networks and telemetry software work.
 
 **This is an educational project.** It is not affiliated with, endorsed by,
 or derived from any vehicle manufacturer. The CAN protocol is invented for
@@ -16,6 +16,26 @@ this project. No real vehicle data or proprietary specification is used.
 
 [**Demo video**](https://youtu.be/2TDl8FXRYqo) — the pipeline running, the
 dashboard updating live, and an injected coolant fault triggering DTC P0001.
+
+## Quick start
+
+Requires only Docker.
+
+```bash
+git clone https://github.com/FranciumReact/vehicle-telemetry.git
+cd vehicle-telemetry
+docker compose up --build
+```
+
+Open http://localhost:5000. The database initialises itself, the pipeline
+runs a 30-second simulated drive with an injected fault, and the dashboard
+shows it live.
+
+To run another drive while the database and dashboard stay up:
+
+```bash
+docker compose run --rm pipeline
+```
 
 ## Motivation
 
@@ -28,8 +48,6 @@ Rather than read about it, I built a simplified version end to end.
 
 ## Current status
 
-Milestones 1-8 of 13 complete.
-
 | Component | Status |
 |---|---|
 | Fictional CAN protocol specification | Done |
@@ -41,9 +59,11 @@ Milestones 1-8 of 13 complete.
 | Diagnostic trouble code engine | Done |
 | PostgreSQL storage | Done |
 | Web dashboard | Done |
+| Containerisation (Docker Compose) | Done |
+| Continuous integration (GitHub Actions) | Done |
+| Test framework and expanded coverage | Not started |
 | Python analytics | Not started |
 | Anomaly detection | Not started |
-| Containerisation and CI | Not started |
 
 ## Architecture
 
@@ -64,6 +84,14 @@ producer.
 The dashboard is a separate process that reads from PostgreSQL. It never
 talks to the C++ pipeline directly — the database is the handoff point,
 which is how real telemetry systems keep ingestion and query independent.
+
+Under Docker Compose each of these runs in its own container:
+
+```
+db          PostgreSQL 16, schema and seed loaded on first start
+pipeline    the C++ binary
+dashboard   Flask, published on port 5000
+```
 
 ## The CAN protocol
 
@@ -104,9 +132,9 @@ before it heals. This mirrors how production ECUs avoid setting codes on a
 single noisy sample. Only state transitions are reported as events, not the
 ongoing condition.
 
-The difference shows in the output. A 15-frame injected overheat produces 15
-range violations, 2 rate violations (the jump in and the recovery), and
-exactly one confirmed DTC:
+The difference shows in the output. In a 5-second run with a 15-frame
+injected overheat, the fault produced 15 range violations, 2 rate violations
+(the jump in and the recovery), and exactly one confirmed DTC:
 
 ```
 DTC P0001 SET at t=2.10
@@ -187,6 +215,44 @@ a dashboard that is broken must not look the same to the person reading it.
 with `ORDER BY s.name, t.recorded_at DESC` returns the most recent row for
 each signal in a single round trip, rather than one query per signal.
 
+## Containerisation and CI
+
+**One command to run everything.** Docker Compose starts PostgreSQL, the
+pipeline, and the dashboard as three containers on a private network.
+Without it, running the project took eleven manual setup steps.
+
+**Configuration through the environment paid off here.** Both the C++ and
+Python sides read their connection string from `TELEMETRY_DB`. Inside Compose
+the database is a separate host named `db`, not a local socket — and moving
+to it required no code change, only a different environment variable.
+
+**Multi-stage build for the pipeline.** The first stage has the compiler,
+CMake, and development headers; the final image contains only the binary
+and the one shared library it links against. The toolchain never ships.
+
+**Readiness, not just startup.** PostgreSQL takes a few seconds to accept
+connections. A healthcheck using `pg_isready`, combined with
+`depends_on: condition: service_healthy`, makes the pipeline and dashboard
+wait until the database is actually ready. Plain `depends_on` only waits for
+the container to start, which is a common source of intermittent failures.
+
+**The database port is not published.** Containers reach it over the
+Compose network, so it is never exposed to the host.
+
+**The Flask debugger is never exposed.** It allows arbitrary code execution,
+so it is enabled only when the server is bound to localhost. Inside the
+container, where Flask must bind to `0.0.0.0`, it is off.
+
+**Line-buffered output.** When stdout is a pipe rather than a terminal, C
+switches to full buffering and holds output until exit. The pipeline sets
+line buffering explicitly so its logs appear in `docker compose logs` as
+they happen.
+
+**CI on every push and pull request.** GitHub Actions builds the project on
+a clean Ubuntu 24.04 runner and runs the test suite. It was verified by
+deliberately breaking a scaling factor on a branch and confirming the check
+failed and blocked the pull request.
+
 ## Design decisions
 
 **Table-driven decoding.** Signal parameters live in one data structure
@@ -246,7 +312,7 @@ included. At 500 kbit/s that puts the theoretical ceiling near 4,000 frames
 per second, and real buses are typically run well below saturation because
 arbitration latency degrades as load approaches the limit.
 
-## Building and running
+## Building without Docker
 
 Requires CMake 3.16+, a C++17 compiler, PostgreSQL, libpqxx, and Python 3.
 
@@ -267,11 +333,10 @@ psql -d vehicle_telemetry -f database/seed.sql
 Build and run the pipeline:
 
 ```bash
-mkdir -p build && cd build
-cmake ..
-make
-./encode_test    # 30-second drive cycle with an injected fault
-./test_decode    # decoder tests
+cmake -S . -B build
+cmake --build build
+./build/encode_test    # 30-second drive cycle with an injected fault
+./build/test_decode    # decoder tests
 ```
 
 Run the dashboard in a second terminal, then open http://localhost:5000:
@@ -279,7 +344,7 @@ Run the dashboard in a second terminal, then open http://localhost:5000:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install flask psycopg2-binary
+pip install -r dashboard/requirements.txt
 python dashboard/app.py
 ```
 
@@ -299,6 +364,8 @@ refused rather than silently decoded.
 
 Fault injection in the simulator exercises both validators and the DTC
 engine on every run.
+
+The tests run in CI on every push and pull request.
 
 ## Limitations
 
@@ -326,21 +393,30 @@ engine on every run.
 - The dashboard runs on Flask's development server, which is single-threaded
   and not suitable for deployment. It also shows only current values; there
   are no historical charts yet.
-- There is no authentication on the API. It is bound to localhost and
-  assumes a trusted local environment.
+- There is no authentication on the API. It assumes a trusted local
+  environment.
+- The Compose file uses a hardcoded development database password. A real
+  deployment would inject it as a secret.
+- Tests use plain `assert`, which compiles to nothing when `NDEBUG` is
+  defined. A Release build would therefore run the tests without checking
+  anything. Moving to a test framework is the next milestone.
 
 ## Planned
 
-Python analytics over stored sessions, statistical anomaly detection,
-historical charts on the dashboard, containerisation, and CI.
+A proper C++ test framework with DTC and malformed-frame coverage, Python
+analytics over stored sessions, statistical anomaly detection, and
+historical charts on the dashboard.
 
 ## Repository layout
 
 ```
-include/     headers
-src/         implementation
-tests/       unit tests
-database/    schema and seed SQL
-dashboard/   Flask API and static page
-docs/        protocol specification and screenshots
+include/            headers
+src/                implementation
+tests/              unit tests
+database/           schema and seed SQL
+dashboard/          Flask API, static page, requirements
+docker/             Dockerfiles for the pipeline and dashboard
+docs/               protocol specification and screenshots
+.github/workflows/  CI configuration
+docker-compose.yml  full-system orchestration
 ```
