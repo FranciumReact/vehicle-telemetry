@@ -13,6 +13,9 @@
 
 
 int main() {
+    // Line-buffer stdout so logs appear immediately when captured by Docker,
+    // rather than all at once on exit.
+    setvbuf(stdout, nullptr, _IOLBF, 0);
     // Shared between both threads. Handles its own locking internally,
     // so neither thread has to think about mutexes.
     FrameQueue q;

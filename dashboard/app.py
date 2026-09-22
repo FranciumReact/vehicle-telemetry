@@ -84,6 +84,8 @@ def latest():
 
 
 if __name__ == '__main__':
-    # debug=True reloads on file changes and shows tracebacks in the
-    # browser. Development only — never in production.
-    app.run(debug=True, port=5000)
+    # Locally we bind to localhost; Compose sets FLASK_HOST=0.0.0.0 so the
+    # container is reachable. The debugger allows arbitrary code execution,
+    # so it is only ever enabled when bound to localhost.
+    host = os.environ.get('FLASK_HOST', '127.0.0.1')
+    app.run(host=host, port=5000, debug=(host == '127.0.0.1'))
