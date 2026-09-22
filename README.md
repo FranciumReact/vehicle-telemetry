@@ -1,5 +1,7 @@
 # Vehicle Telemetry & Diagnostics Platform
 
+![CI](https://github.com/FranciumReact/vehicle-telemetry/actions/workflows/ci.yml/badge.svg)
+
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
 encoder/decoder, a threaded processing pipeline with validation and
 diagnostics, PostgreSQL persistence, and a live web dashboard. Built as a
