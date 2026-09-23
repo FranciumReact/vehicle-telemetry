@@ -61,7 +61,7 @@ Rather than read about it, I built a simplified version end to end.
 | Web dashboard | Done |
 | Containerisation (Docker Compose) | Done |
 | Continuous integration (GitHub Actions) | Done |
-| Test framework and expanded coverage | Not started |
+| Catch2 test suite, fuzzing, sanitizers | Done |
 | Python analytics | Not started |
 | Anomaly detection | Not started |
 
@@ -215,6 +215,49 @@ a dashboard that is broken must not look the same to the person reading it.
 with `ORDER BY s.name, t.recorded_at DESC` returns the most recent row for
 each signal in a single round trip, rather than one query per signal.
 
+## Testing
+
+The suite uses [Catch2](https://github.com/catchorg/Catch2) v3, pulled in by
+CMake's `FetchContent` so nothing has to be installed first. It runs through
+CTest, locally and in CI.
+
+**Round-trip tests** encode known physical values, decode them back, and
+assert the result is within one quantisation step. Exact float comparison is
+not valid here — 33% throttle encodes to a raw value that decodes as 33.2%,
+because an 8-bit field with factor 0.4 has 0.4% resolution. The tolerance
+for each signal is that signal's own resolution.
+
+**Rejection tests** confirm that unknown identifiers and DLC values shorter
+or longer than the spec are refused rather than silently decoded.
+
+**Debouncing tests** verify the DTC engine's state machine directly: nine
+consecutive faulting cycles produce no event, the tenth produces exactly one
+SET event, and continuing to fault produces nothing further because only
+transitions are events.
+
+**Fuzzing.** 10,000 frames with random identifiers, random DLC values, and
+random payload bytes are fed to the decoder. There is no correct output for
+random input, so the property asserted is not correctness but survival: the
+decoder must return without crashing, hanging, or reading past the end of
+the payload.
+
+**Sanitizers.** A second CI job rebuilds the suite with AddressSanitizer and
+UndefinedBehaviorSanitizer and runs it again. ASan instruments every memory
+access, so the fuzzing test becomes a real memory-safety check rather than
+an assumption. It passes clean, and the reason is structural: `decode_frame`
+rejects any frame whose DLC does not match the spec before touching the
+payload, so malformed frames never reach the bit-extraction code at all.
+
+**Fault injection** in the simulator exercises both validators and the DTC
+engine on every run of the pipeline itself.
+
+Run them with:
+
+```bash
+cmake -S . -B build && cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
 ## Containerisation and CI
 
 **One command to run everything.** Docker Compose starts PostgreSQL, the
@@ -248,10 +291,10 @@ switches to full buffering and holds output until exit. The pipeline sets
 line buffering explicitly so its logs appear in `docker compose logs` as
 they happen.
 
-**CI on every push and pull request.** GitHub Actions builds the project on
-a clean Ubuntu 24.04 runner and runs the test suite. It was verified by
-deliberately breaking a scaling factor on a branch and confirming the check
-failed and blocked the pull request.
+**CI on every push and pull request.** Two jobs run in parallel on a clean
+Ubuntu 24.04 runner: a normal build with the test suite, and a sanitized
+build. CI was verified by deliberately breaking a scaling factor on a branch
+and confirming the check failed and blocked the pull request.
 
 ## Design decisions
 
@@ -263,7 +306,8 @@ plausible-looking but wrong output with no error.
 **Reject malformed frames rather than partially decode them.** A frame
 whose DLC doesn't match the spec is discarded and counted. Partial decoding
 would mean bounds-checking every signal individually, and a sensor value
-you can't trust is worse than no value.
+you can't trust is worse than no value. The sanitized fuzzing run is the
+evidence that this decision holds.
 
 **Bounded queue with a drop counter.** An unbounded queue under sustained
 overload ends in an out-of-memory kill. Dropping the oldest frame and
@@ -335,8 +379,8 @@ Build and run the pipeline:
 ```bash
 cmake -S . -B build
 cmake --build build
-./build/encode_test    # 30-second drive cycle with an injected fault
-./build/test_decode    # decoder tests
+./build/encode_test                          # 30-second drive cycle
+ctest --test-dir build --output-on-failure   # test suite
 ```
 
 Run the dashboard in a second terminal, then open http://localhost:5000:
@@ -351,21 +395,6 @@ python dashboard/app.py
 Built with `-Wall -Wextra -Werror`. The connection string is read from
 `TELEMETRY_DB` on both the C++ and Python sides, falling back to
 `dbname=vehicle_telemetry`.
-
-## Testing
-
-Round-trip tests encode known physical values, decode them back, and assert
-the result is within one quantisation step. Exact float comparison is not
-valid here — 33% throttle encodes to a raw value that decodes as 33.2%,
-because an 8-bit field with factor 0.4 has 0.4% resolution.
-
-Rejection tests confirm that unknown identifiers and DLC mismatches are
-refused rather than silently decoded.
-
-Fault injection in the simulator exercises both validators and the DTC
-engine on every run.
-
-The tests run in CI on every push and pull request.
 
 ## Limitations
 
@@ -397,14 +426,17 @@ The tests run in CI on every push and pull request.
   environment.
 - The Compose file uses a hardcoded development database password. A real
   deployment would inject it as a secret.
-- Tests use plain `assert`, which compiles to nothing when `NDEBUG` is
-  defined. A Release build would therefore run the tests without checking
-  anything. Moving to a test framework is the next milestone.
+- There are no database integration tests. The test suite covers the decode,
+  validation, and diagnostic layers, all of which are pure functions or
+  in-memory state; the persistence layer is exercised only by running the
+  pipeline.
+- The fuzzing test uses a fixed seed so failures are reproducible. That makes
+  it a regression test over one fixed set of inputs rather than a continuous
+  search for new ones.
 
 ## Planned
 
-A proper C++ test framework with DTC and malformed-frame coverage, Python
-analytics over stored sessions, statistical anomaly detection, and
+Python analytics over stored sessions, statistical anomaly detection, and
 historical charts on the dashboard.
 
 ## Repository layout
@@ -412,7 +444,7 @@ historical charts on the dashboard.
 ```
 include/            headers
 src/                implementation
-tests/              unit tests
+tests/              Catch2 test suite
 database/           schema and seed SQL
 dashboard/          Flask API, static page, requirements
 docker/             Dockerfiles for the pipeline and dashboard
