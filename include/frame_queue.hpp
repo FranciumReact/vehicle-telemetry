@@ -12,6 +12,7 @@ public:
     std::optional<CanFrame> pop();
     void shutdown();
     uint64_t dropped() const;
+    size_t depth() const;
 
 private:
     std::queue<CanFrame>    queue_;

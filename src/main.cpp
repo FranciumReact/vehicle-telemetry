@@ -26,6 +26,13 @@ int main() {
     std::thread producer([&]{
         VehicleState s;
 
+        // Absolute deadlines, not fixed sleeps. sleep_for waits at least
+        // 10 ms and then the loop does work on top, so each iteration costs
+        // slightly more than 10 ms and the error accumulates — about 0.9 s
+        // of drift over a 30-second run. sleep_until absorbs the work time
+        // instead, which is how real-time loops are written.
+        auto next = std::chrono::steady_clock::now();
+
         // 3000 ticks at 10 ms each = 30 seconds of simulated driving.
         for (int i = 0; i < 3000; i++) {
             update_vehicle(s, 0.01);
@@ -40,8 +47,8 @@ int main() {
             q.push(build_engine_data(s.rpm, s.throttle_pct,
                                      s.load_pct, coolant));
 
-            // Emit at the 10 ms cycle time the protocol spec defines.
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            next += std::chrono::milliseconds(10);
+            std::this_thread::sleep_until(next);
         }
 
         // No more frames coming. Without this the consumer blocks forever.

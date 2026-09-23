@@ -44,6 +44,29 @@ def summarise(df):
     return df.describe().T[['count', 'mean', 'std', 'min', 'max']]
 
 
+def load_lag(session_id):
+    """Ingestion lag: how long after the vehicle observed a value did it
+    reach the database?
+
+    vehicle_time is seconds since session start; recorded_at is an absolute
+    timestamp. started_at is the common origin that makes them comparable.
+    """
+    sql = """
+        SELECT t.vehicle_time,
+               EXTRACT(EPOCH FROM (t.recorded_at - s.started_at))
+                   - t.vehicle_time AS lag_s
+        FROM telemetry t
+        JOIN sessions s ON s.id = t.session_id
+        WHERE t.session_id = %s
+        ORDER BY t.vehicle_time
+    """
+    with psycopg2.connect(DB) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (session_id,))
+            return pd.DataFrame(cur.fetchall(),
+                                columns=['vehicle_time', 'lag_s'])
+
+
 if __name__ == '__main__':
     session = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     df = load_session(session)
@@ -57,3 +80,13 @@ if __name__ == '__main__':
     print(f"Session {session}: {len(df)} samples over {duration:.1f}s, "
           f"{len(df.columns)} signals\n")
     print(summarise(df).round(2))
+
+    # Postgres returns NUMERIC as Decimal, which pandas cannot average.
+    lag = load_lag(session)
+    lag['lag_s'] = lag['lag_s'].astype(float)
+
+    print(f"\nIngestion lag (seconds):")
+    print(f"  mean   {lag['lag_s'].mean():.4f}")
+    print(f"  median {lag['lag_s'].median():.4f}")
+    print(f"  p95    {lag['lag_s'].quantile(0.95):.4f}")
+    print(f"  max    {lag['lag_s'].max():.4f}")

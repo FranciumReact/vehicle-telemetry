@@ -34,3 +34,8 @@ void FrameQueue::shutdown() {
 uint64_t FrameQueue::dropped() const {
     return dropped_;
 }
+
+size_t FrameQueue::depth() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return queue_.size();
+}

@@ -1,5 +1,6 @@
 #include "telemetry_writer.hpp"
 #include <cstdio>
+#include <string>
 
 TelemetryWriter::TelemetryWriter(const std::string& conn_string)
     : conn_(conn_string) {
@@ -52,29 +53,43 @@ void TelemetryWriter::add(const DecodedFrame& values, double time_s) {
 void TelemetryWriter::flush() {
     if (buffer_.empty()) return;
 
-    // One transaction for the whole batch: one commit, one disk flush,
-    // instead of one per row.
-    pqxx::work tx(conn_);
+    // One multi-row INSERT rather than one statement per row: a single
+    // round trip and a single commit for the whole batch.
+    std::string sql =
+        "INSERT INTO telemetry "
+        "(session_id, signal_id, vehicle_time, recorded_at, value) VALUES ";
 
-    for (const Row& r : buffer_) {
-        tx.exec_params(
-            "INSERT INTO telemetry "
-            "(session_id, signal_id, vehicle_time, recorded_at, value) "
-            "VALUES ($1, $2, $3, now(), $4)",
-            session_id_, r.signal_id, r.time_s, r.value);
+    pqxx::params params;
+    int n = 1;
+
+    for (size_t i = 0; i < buffer_.size(); i++) {
+        const Row& r = buffer_[i];
+
+        if (i > 0) sql += ", ";
+        sql += "($" + std::to_string(n)      + ", $" + std::to_string(n + 1)
+             + ", $" + std::to_string(n + 2) + ", now(), $" + std::to_string(n + 3)
+             + ")";
+        n += 4;
+
+        // Only the placeholder text is built here. The values themselves are
+        // still sent separately, so this is not string interpolation.
+        params.append(session_id_);
+        params.append(r.signal_id);
+        params.append(r.time_s);
+        params.append(r.value);
     }
 
+    pqxx::work tx(conn_);
+    tx.exec_params(sql, params);
     tx.commit();
     buffer_.clear();
 }
 
 void TelemetryWriter::end_session() {
     pqxx::work tx(conn_);
-    
     tx.exec_params(
         "UPDATE sessions SET ended_at = now() WHERE id = $1",
-        session_id_
-    );
+        session_id_);
     tx.commit();
 }
 
