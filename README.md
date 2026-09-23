@@ -4,9 +4,10 @@
 
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
 encoder/decoder, a threaded processing pipeline with validation and
-diagnostics, PostgreSQL persistence, and a live web dashboard, containerised
-with Docker Compose and built and tested in CI. Built as a learning project to
-understand how vehicle networks and telemetry software work.
+diagnostics, PostgreSQL persistence, a live web dashboard, and offline
+analytics in Python — containerised with Docker Compose and built and tested
+in CI. Built as a learning project to understand how vehicle networks and
+telemetry software work.
 
 **This is an educational project.** It is not affiliated with, endorsed by,
 or derived from any vehicle manufacturer. The CAN protocol is invented for
@@ -62,7 +63,7 @@ Rather than read about it, I built a simplified version end to end.
 | Containerisation (Docker Compose) | Done |
 | Continuous integration (GitHub Actions) | Done |
 | Catch2 test suite, fuzzing, sanitizers | Done |
-| Python analytics | Not started |
+| Python analytics | Done |
 | Anomaly detection | Not started |
 
 ## Architecture
@@ -70,9 +71,10 @@ Rather than read about it, I built a simplified version end to end.
 ```
 Vehicle model -> Frame builders -> Bounded queue -> Decoder -> Validation -> DTC engine -> PostgreSQL
   (physics)       (bit packing)    (thread-safe)  (table-driven)  (range/rate)  (debounced)      |
-                                                                                                 v
-                                                                                  Flask API -> Dashboard
-                                                                                   (JSON)       (browser)
+                                                                                    +------------+------------+
+                                                                                    v                         v
+                                                                       Flask API -> Dashboard      Python analytics
+                                                                        (JSON)      (browser)        (pandas, batch)
 ```
 
 The producer thread simulates the vehicle and emits CAN frames at the cycle
@@ -81,9 +83,9 @@ runs diagnostics, and persists the result. A bounded queue with a mutex and
 condition variable connects the two, so a slow consumer never stalls the
 producer.
 
-The dashboard is a separate process that reads from PostgreSQL. It never
-talks to the C++ pipeline directly — the database is the handoff point,
-which is how real telemetry systems keep ingestion and query independent.
+Neither the dashboard nor the analytics talks to the C++ pipeline directly —
+the database is the handoff point, which is how real telemetry systems keep
+ingestion and query independent.
 
 Under Docker Compose each of these runs in its own container:
 
@@ -132,18 +134,19 @@ before it heals. This mirrors how production ECUs avoid setting codes on a
 single noisy sample. Only state transitions are reported as events, not the
 ongoing condition.
 
-The difference shows in the output. In a 5-second run with a 15-frame
-injected overheat, the fault produced 15 range violations, 2 rate violations
-(the jump in and the recovery), and exactly one confirmed DTC:
+The difference shows in the output. A 30-second run with a 200-frame
+injected overheat produces 200 range violations, 2 rate violations (the jump
+in and the recovery), and exactly one confirmed DTC:
 
 ```
-DTC P0001 SET at t=2.10
-DTC P0001 CLEARED at t=2.25
-decoded 500, out of range 15, implausible rate 2, dropped 0
+DTC P0001 SET at t=15.10
+DTC P0001 CLEARED at t=17.10
+decoded 3000, out of range 200, implausible rate 2, dropped 0
 ```
 
-Isolated single-frame spikes produce range violations but no DTC at all,
-which is the debouncing working as intended.
+The fault starts at t=15.00 and the code confirms at 15.10 — ten cycles
+later, as designed. Isolated single-frame spikes produce range violations
+but no DTC at all.
 
 ## Database schema
 
@@ -155,16 +158,22 @@ Five tables: `sessions`, `signals`, `telemetry`, `dtc_catalog`, and
 400 readings per second that string would be the majority of the table's
 size, and a typo such as `"EngineRPMM"` would silently create a phantom
 signal. The same reasoning puts DTC descriptions and severities in
-`dtc_catalog` instead of on every event row: the description of P0001 never
-changes, so it is stored once.
+`dtc_catalog` instead of on every event row.
 
 **Foreign keys enforce integrity.** A telemetry row cannot reference a
 session that does not exist, and a DTC event cannot reference a code that
 is not in the catalog. Deleting a session with telemetry still attached is
 refused rather than silently orphaning rows.
 
+**Two timestamps, deliberately.** `vehicle_time` is when the vehicle
+observed a value; `recorded_at` is when this system stored it. The gap
+between them is ingestion lag, which is measurable because both are kept.
+Analysis indexes on `vehicle_time`, because batched inserts share a single
+`recorded_at` across the whole transaction and it is therefore not unique
+per sample.
+
 **Indexes match the query patterns.** The composite index on
-`telemetry(session_id, recorded_at)` serves the most common query — one
+`telemetry(session_id, vehicle_time)` serves the most common query — one
 session's data in time order — for both filtering and sorting. Column order
 matters: the reverse would not serve that query.
 
@@ -214,6 +223,156 @@ a dashboard that is broken must not look the same to the person reading it.
 **Latest value per signal in one query.** Postgres `DISTINCT ON (s.name)`
 with `ORDER BY s.name, t.recorded_at DESC` returns the most recent row for
 each signal in a single round trip, rather than one query per signal.
+
+## Analytics
+
+The pipeline is a **streaming** system: it processes one frame at a time and
+remembers nothing beyond the last value. That keeps memory bounded and lets
+it run indefinitely, but it cannot look backwards. `python/analyse.py` is
+the **batch** counterpart — it loads a whole session into pandas and computes
+over all of it at once.
+
+```
+$ python python/analyse.py 17
+Session 17: 3000 samples over 30.0s, 4 signals
+
+              count     mean     std     min     max
+CoolantTemp  3000.0    40.84   42.87   20.00   200.0
+EngineLoad   3000.0    59.88   10.39   36.00    72.0
+EngineRPM    3000.0  2232.58  836.53  800.75  3434.0
+ThrottlePos  3000.0    66.54   11.55   40.00    80.0
+```
+
+CoolantTemp's standard deviation is larger than its mean, which for a
+temperature reading is not physically sensible. That is the injected fault
+showing up as a distribution shape: roughly 2800 samples near 25 °C and 200
+at 200 °C. ThrottlePos, by contrast, is unremarkable. Noticing that kind of
+difference automatically is what the anomaly-detection milestone is for.
+
+**Long to wide.** The database stores one row per reading, so adding a
+signal needs no schema change. Analysis wants one column per signal. The
+reshape happens in pandas rather than SQL: Postgres can pivot, but it needs
+an extension and the column names must be hardcoded, whereas `DataFrame.pivot`
+discovers them from the data. The general rule is to filter and aggregate in
+SQL, where the indexes are, and do shape manipulation in pandas.
+
+## Investigation: ingestion lag
+
+Because both timestamps are stored, the delay between a value being observed
+and being written is measurable. The investigation is worth recording because
+three plausible explanations were wrong before the real one appeared.
+
+**The measurement.** Mean ingestion lag came out at **0.49 s**, with a max
+near 1.0 s. Expected was ~0.125 s: a 100-row batch at 400 rows/sec fills in
+0.25 s, so the average row should wait half that. Four times off.
+
+**Hypothesis 1 — rows wait too long in the buffer.** Testable: shrink
+`kBatchSize` from 100 to 10 and lag should fall roughly tenfold. It fell to
+0.37 s, about 25%. **Disproved.**
+
+**Hypothesis 2 — the per-row INSERT costs too many round trips.** `flush()`
+issued one statement per buffered row. Replacing it with a single multi-row
+INSERT should help. Lag rose to 0.62 s. Re-running against an empty table to
+rule out index-growth effects still gave 0.58 s. **Disproved.**
+
+**Hypothesis 3 — the consumer cannot keep up.** Instrumenting `flush()`
+directly showed it taking 4–26 ms, typically 9 ms — about 4% of the
+consumer's time, far too little to explain 580 ms. Adding a queue-depth
+probe showed depth **0 at every sample** across the entire run.
+**Disproved.**
+
+**The actual cause — the clocks disagreed.** `vehicle_time` is a counter:
+the consumer adds 0.01 per frame. Wall time is not. `sleep_for(10ms)`
+guarantees *at least* 10 ms and the loop then does work on top, so each
+iteration cost slightly more than 10 ms and the error accumulated. Comparing
+`ended_at - started_at` against simulated duration confirmed it: **30.92 s of
+wall clock for 30.00 s of simulated time**. That 0.9 s of drift, accumulating
+linearly, was most of what the "lag" metric had been reporting.
+
+**The fix.** `sleep_until` with an absolute deadline instead of `sleep_for`
+with a fixed duration. The deadline advances by exactly 10 ms each iteration,
+so the loop's own work is absorbed rather than added.
+
+| | Before | After |
+|---|---|---|
+| Wall clock for a 30 s run | 30.92 s | 30.05 s |
+| Mean ingestion lag | 0.49 s | 0.116 s |
+| p95 ingestion lag | 0.86 s | 0.228 s |
+| Max ingestion lag | 0.97 s | 0.283 s |
+
+The remaining 0.116 s mean and 0.283 s max now match the theoretical
+batch-fill prediction of 0.125 s and 0.25 s, which is the sign the metric is
+finally measuring what it claims to.
+
+**What it taught.** A latency metric is only as trustworthy as the clocks it
+is built from; comparing a wall clock to a synthetic counter measures the
+difference between the clocks, not the system. And a benchmark is only valid
+if everything except the variable under test is held constant — the second
+hypothesis was initially measured against a table that had grown by 24,000
+rows, which had to be ruled out separately.
+
+## Design decisions
+
+**Table-driven decoding.** Signal parameters live in one data structure
+rather than being hardcoded at each call site. This came from getting
+burned: a mistyped scaling factor (0.04 instead of 0.4) produced
+plausible-looking but wrong output with no error.
+
+**Reject malformed frames rather than partially decode them.** A frame
+whose DLC doesn't match the spec is discarded and counted. Partial decoding
+would mean bounds-checking every signal individually, and a sensor value
+you can't trust is worse than no value. The sanitized fuzzing run is the
+evidence that this decision holds.
+
+**Bounded queue with a drop counter.** An unbounded queue under sustained
+overload ends in an out-of-memory kill. Dropping the oldest frame and
+counting the loss makes overload visible and survivable.
+
+**std::optional for fallible operations.** Decoding can fail on an unknown
+ID or a DLC mismatch. Returning an optional makes the failure explicit
+rather than smuggling it through a sentinel value.
+
+**Validation bounds are physical, not representational.** CoolantTemp can
+encode up to 215 °C, but its valid range stops at 130 °C. Using the encoding
+limit would mean validation only ever catches encoding errors, never sensor
+faults.
+
+**Batched database writes.** Readings are buffered and written 100 at a time
+as a single multi-row INSERT in one transaction. The cost is durability — up
+to one batch can be lost on a crash — which is acceptable for 100 Hz samples
+where the next one arrives in 10 ms, and would not be for financial data.
+
+**Absolute deadlines in the real-time loop.** `sleep_until` rather than
+`sleep_for`, so per-iteration work does not accumulate into timing drift.
+
+**RAII for database lifetime.** The writer's destructor flushes the buffer
+and closes the session, so no code path can exit without the data being
+written and `ended_at` being set.
+
+**Parameterised queries throughout.** Values are sent separately from the
+SQL text, so they can never be interpreted as SQL. The multi-row INSERT
+builds placeholder text dynamically but never interpolates a value.
+
+## Performance
+
+Measured on a 13th Gen Intel Core i9-13900H (WSL2, Ubuntu), single producer
+and single consumer thread:
+
+- Decode throughput: ~645,000 frames/sec unthrottled
+  (three runs: 650k / 642k / 647k)
+- Ingestion lag at protocol cycle times: 0.116 s mean, 0.283 s max
+- Timing drift over a 30-second run: 51 ms
+- Zero frames dropped, queue depth 0 throughout
+
+Under the unthrottled test the producer outruns the consumer and roughly 90%
+of frames are evicted by the queue's drop policy. That is the intended
+behaviour under overload — bounded memory, counted loss — not a failure.
+
+For context: a classic CAN frame with 8 data bytes occupies roughly 110-130
+bits on the wire once identifier, CRC, ACK, and stuffing overhead are
+included. At 500 kbit/s that puts the theoretical ceiling near 4,000 frames
+per second, and real buses are typically run well below saturation because
+arbitration latency degrades as load approaches the limit.
 
 ## Testing
 
@@ -296,66 +455,6 @@ Ubuntu 24.04 runner: a normal build with the test suite, and a sanitized
 build. CI was verified by deliberately breaking a scaling factor on a branch
 and confirming the check failed and blocked the pull request.
 
-## Design decisions
-
-**Table-driven decoding.** Signal parameters live in one data structure
-rather than being hardcoded at each call site. This came from getting
-burned: a mistyped scaling factor (0.04 instead of 0.4) produced
-plausible-looking but wrong output with no error.
-
-**Reject malformed frames rather than partially decode them.** A frame
-whose DLC doesn't match the spec is discarded and counted. Partial decoding
-would mean bounds-checking every signal individually, and a sensor value
-you can't trust is worse than no value. The sanitized fuzzing run is the
-evidence that this decision holds.
-
-**Bounded queue with a drop counter.** An unbounded queue under sustained
-overload ends in an out-of-memory kill. Dropping the oldest frame and
-counting the loss makes overload visible and survivable.
-
-**std::optional for fallible operations.** Decoding can fail on an unknown
-ID or a DLC mismatch. Returning an optional makes the failure explicit
-rather than smuggling it through a sentinel value.
-
-**Validation bounds are physical, not representational.** CoolantTemp can
-encode up to 215 °C, but its valid range stops at 130 °C. Using the encoding
-limit would mean validation only ever catches encoding errors, never sensor
-faults.
-
-**Batched database writes.** Readings are buffered and written 100 at a
-time in one transaction rather than one INSERT per reading. A per-reading
-insert costs a network round trip, a transaction commit, and a disk flush;
-batching amortises all three. The cost is durability — up to one batch can
-be lost on a crash — which is acceptable for 100 Hz samples where the next
-one arrives in 10 ms, and would not be for financial data.
-
-**RAII for database lifetime.** The writer's destructor flushes the buffer
-and closes the session, so no code path can exit without the data being
-written and `ended_at` being set.
-
-**Parameterised queries throughout.** Values are sent separately from the
-SQL text, so they can never be interpreted as SQL. No query in this project
-is built by string concatenation, on either the C++ or the Python side.
-
-## Performance
-
-Measured on a 13th Gen Intel Core i9-13900H (WSL2, Ubuntu), single producer
-and single consumer thread:
-
-- Decode throughput: ~645,000 frames/sec unthrottled
-  (three runs: 650k / 642k / 647k)
-- Zero frames dropped when the producer emits at protocol cycle times
-
-Under the unthrottled test the producer outruns the consumer and roughly 90%
-of frames are evicted by the queue's drop policy. That is the intended
-behaviour under overload — bounded memory, counted loss — not a failure.
-
-For context: a classic CAN frame with 8 data bytes occupies roughly 110-130
-bits on the wire once identifier, CRC, ACK, and stuffing overhead are
-included. At 500 kbit/s that puts the theoretical ceiling near 4,000 frames
-per second, and real buses are typically run well below saturation because
-arbitration latency degrades as load approaches the limit.
-
 ## Building without Docker
 
 Requires CMake 3.16+, a C++17 compiler, PostgreSQL, libpqxx, and Python 3.
@@ -392,6 +491,13 @@ pip install -r dashboard/requirements.txt
 python dashboard/app.py
 ```
 
+Analyse a stored session:
+
+```bash
+pip install pandas
+python python/analyse.py <session_id>
+```
+
 Built with `-Wall -Wextra -Werror`. The connection string is read from
 `TELEMETRY_DB` on both the C++ and Python sides, falling back to
 `dbname=vehicle_telemetry`.
@@ -412,11 +518,10 @@ Built with `-Wall -Wextra -Werror`. The connection string is read from
   enforceable at this sample rate.
 - The DTC engine detects threshold conditions in telemetry. It does not
   diagnose mechanical faults and makes no predictive claims.
-- `recorded_at` and `occurred_at` use database ingestion time, not vehicle
-  time. A real system would store both, since replay or faster-than-realtime
-  processing makes the two diverge.
-- `flush()` issues one statement per buffered row inside a single
-  transaction. A single multi-row INSERT would be faster still.
+- Schema changes are applied by hand. There is no migration tool, so adding
+  `vehicle_time` meant an `ALTER TABLE` against the running database and a
+  separate edit to `schema.sql`, which a real project would keep in one
+  versioned place.
 - Validation failures are counted but not persisted. Only their aggregate
   effect on DTCs reaches the database.
 - The dashboard runs on Flask's development server, which is single-threaded
@@ -433,11 +538,14 @@ Built with `-Wall -Wextra -Werror`. The connection string is read from
 - The fuzzing test uses a fixed seed so failures are reproducible. That makes
   it a regression test over one fixed set of inputs rather than a continuous
   search for new ones.
+- Residual timing drift of ~51 ms over 30 seconds remains. Eliminating it
+  entirely would need a real-time scheduler, which a general-purpose OS does
+  not provide.
 
 ## Planned
 
-Python analytics over stored sessions, statistical anomaly detection, and
-historical charts on the dashboard.
+Statistical anomaly detection over stored sessions, and historical charts on
+the dashboard.
 
 ## Repository layout
 
@@ -447,6 +555,7 @@ src/                implementation
 tests/              Catch2 test suite
 database/           schema and seed SQL
 dashboard/          Flask API, static page, requirements
+python/             offline analytics
 docker/             Dockerfiles for the pipeline and dashboard
 docs/               protocol specification and screenshots
 .github/workflows/  CI configuration
