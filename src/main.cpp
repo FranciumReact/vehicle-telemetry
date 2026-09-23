@@ -11,11 +11,11 @@
 #include <chrono>
 #include <cstdlib>
 
-
 int main() {
     // Line-buffer stdout so logs appear immediately when captured by Docker,
     // rather than all at once on exit.
     setvbuf(stdout, nullptr, _IOLBF, 0);
+
     // Shared between both threads. Handles its own locking internally,
     // so neither thread has to think about mutexes.
     FrameQueue q;
@@ -27,14 +27,11 @@ int main() {
         VehicleState s;
 
         // 3000 ticks at 10 ms each = 30 seconds of simulated driving.
-        // Long enough to actually watch the dashboard update, rather than
-        // being over before the 1 Hz poll has fired twice.
         for (int i = 0; i < 3000; i++) {
             update_vehicle(s, 0.01);
 
             // Fault injection: a sustained overheat between ticks 1500 and
-            // 1700, so it lands halfway through the run instead of at the
-            // start. This REPLACES the real reading rather than adding a
+            // 1700. This REPLACES the real reading rather than adding a
             // second frame — interleaving good and bad frames would reset
             // the DTC engine's fail counter every other cycle, so it would
             // never confirm.
@@ -57,11 +54,13 @@ int main() {
         int decoded = 0, out_of_range = 0, bad_rate = 0;
         RateValidator rv;
         DtcEngine dtc;
+
         // Connection string comes from the environment so a deployment can
         // override it without a code change; falls back to the local default.
         const char* conn = std::getenv("TELEMETRY_DB");
         TelemetryWriter writer(conn ? conn : "dbname=vehicle_telemetry");
         writer.start_session("SIM-001");
+
         double sim_time = 0.0;
 
         while (auto frame = q.pop()) {
@@ -94,8 +93,9 @@ int main() {
             for (const DtcEvent& e : dtc.update(*values, sim_time)) {
                 printf("  DTC %s %s at t=%.2f\n",
                        e.code.c_str(), e.active ? "SET" : "CLEARED", e.time_s);
-                writer.log_dtc(e.code, e.active);
+                writer.log_dtc(e.code, e.active, e.time_s);
             }
+
             writer.add(*values, sim_time);
         }
 

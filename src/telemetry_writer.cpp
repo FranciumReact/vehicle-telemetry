@@ -58,9 +58,10 @@ void TelemetryWriter::flush() {
 
     for (const Row& r : buffer_) {
         tx.exec_params(
-            "INSERT INTO telemetry (session_id, signal_id, recorded_at, value) "
-            "VALUES ($1, $2, now(), $3)",
-            session_id_, r.signal_id, r.value);
+            "INSERT INTO telemetry "
+            "(session_id, signal_id, vehicle_time, recorded_at, value) "
+            "VALUES ($1, $2, $3, now(), $4)",
+            session_id_, r.signal_id, r.time_s, r.value);
     }
 
     tx.commit();
@@ -69,7 +70,7 @@ void TelemetryWriter::flush() {
 
 void TelemetryWriter::end_session() {
     pqxx::work tx(conn_);
-    // your exec_params call here
+    
     tx.exec_params(
         "UPDATE sessions SET ended_at = now() WHERE id = $1",
         session_id_
@@ -77,12 +78,13 @@ void TelemetryWriter::end_session() {
     tx.commit();
 }
 
-void TelemetryWriter::log_dtc(const std::string& code, bool active) {
+void TelemetryWriter::log_dtc(const std::string& code, bool active,
+                              double vehicle_time) {
     pqxx::work tx(conn_);
     tx.exec_params(
-        "INSERT INTO dtc_events (session_id, code, active, occurred_at) "
-        "VALUES ($1, $2, $3, now())",
-        session_id_, code, active
-    );
+        "INSERT INTO dtc_events "
+        "(session_id, code, active, vehicle_time, occurred_at) "
+        "VALUES ($1, $2, $3, $4, now())",
+        session_id_, code, active, vehicle_time);
     tx.commit();
 }

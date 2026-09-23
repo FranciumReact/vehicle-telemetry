@@ -2,8 +2,8 @@
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
-#include "can_decode.hpp"
 #include <unordered_map>
+#include "can_decode.hpp"
 
 class TelemetryWriter {
 public:
@@ -14,7 +14,7 @@ public:
     void add(const DecodedFrame& values, double time_s);
     void flush();
     void end_session();
-    void log_dtc(const std::string& code, bool active);
+    void log_dtc(const std::string& code, bool active, double vehicle_time);
 
 private:
     pqxx::connection conn_;
