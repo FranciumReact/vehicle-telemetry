@@ -25,3 +25,18 @@ jobs:
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libpqxx-dev
+      - name: Build with sanitizers
+        run: |
+          cmake -S . -B build-asan -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -g"
+          cmake --build build-asan
+      - name: Run
+        run: ./build-asan/unit_tests
