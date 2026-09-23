@@ -3,6 +3,7 @@
 
 #include "can_decode.hpp"
 #include "frame_builder.hpp"
+#include "dtc_engine.hpp"
 
 using Catch::Matchers::WithinAbs;
 
@@ -36,5 +37,34 @@ TEST_CASE("malformed frames are rejected") {
     SECTION("DLC longer than the spec") {
         f.dlc = 9;
         CHECK_FALSE(decode_frame(f).has_value());
+    }
+}
+
+TEST_CASE("DTC requires sustained condition before confirming") {
+    DtcEngine dtc;
+    DecodedFrame hot{{"CoolantTemp", 120.0}};   // above the 110 threshold
+
+    SECTION("nine cycles is not enough") {
+        for (int i = 0; i < 9; i++) {
+            CHECK(dtc.update(hot, i * 0.01).empty());
+        }
+    }
+
+    SECTION("the tenth cycle confirms the fault") {
+        // burn through the first nine
+        for (int i = 0; i < 9; i++) dtc.update(hot, i * 0.01);
+
+        auto events = dtc.update(hot, 0.09);
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].code == "P0001");
+        CHECK(events[0].active);
+    }
+
+    SECTION("a confirmed fault does not re-fire") {
+        // trigger it
+        for (int i = 0; i < 10; i++) dtc.update(hot, i * 0.01);
+
+        // still faulting, but the state has not changed
+        CHECK(dtc.update(hot, 0.10).empty());
     }
 }
