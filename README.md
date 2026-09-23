@@ -5,9 +5,9 @@
 A simulated automotive telemetry system: a fictional CAN protocol, a C++
 encoder/decoder, a threaded processing pipeline with validation and
 diagnostics, PostgreSQL persistence, a live web dashboard, and offline
-analytics in Python — containerised with Docker Compose and built and tested
-in CI. Built as a learning project to understand how vehicle networks and
-telemetry software work.
+analytics and anomaly detection in Python — containerised with Docker Compose
+and built and tested in CI. Built as a learning project to understand how
+vehicle networks and telemetry software work.
 
 **This is an educational project.** It is not affiliated with, endorsed by,
 or derived from any vehicle manufacturer. The CAN protocol is invented for
@@ -64,7 +64,7 @@ Rather than read about it, I built a simplified version end to end.
 | Continuous integration (GitHub Actions) | Done |
 | Catch2 test suite, fuzzing, sanitizers | Done |
 | Python analytics | Done |
-| Anomaly detection | Not started |
+| Statistical anomaly detection | Done |
 
 ## Architecture
 
@@ -74,7 +74,7 @@ Vehicle model -> Frame builders -> Bounded queue -> Decoder -> Validation -> DTC
                                                                                     +------------+------------+
                                                                                     v                         v
                                                                        Flask API -> Dashboard      Python analytics
-                                                                        (JSON)      (browser)        (pandas, batch)
+                                                                        (JSON)      (browser)      (pandas, batch)
 ```
 
 The producer thread simulates the vehicle and emits CAN frames at the cycle
@@ -241,13 +241,15 @@ CoolantTemp  3000.0    40.84   42.87   20.00   200.0
 EngineLoad   3000.0    59.88   10.39   36.00    72.0
 EngineRPM    3000.0  2232.58  836.53  800.75  3434.0
 ThrottlePos  3000.0    66.54   11.55   40.00    80.0
+
+Ingestion lag (seconds):
+  mean   0.1157   median 0.1172   p95 0.2276   max 0.2826
 ```
 
 CoolantTemp's standard deviation is larger than its mean, which for a
 temperature reading is not physically sensible. That is the injected fault
 showing up as a distribution shape: roughly 2800 samples near 25 °C and 200
-at 200 °C. ThrottlePos, by contrast, is unremarkable. Noticing that kind of
-difference automatically is what the anomaly-detection milestone is for.
+at 200 °C. ThrottlePos, by contrast, is unremarkable.
 
 **Long to wide.** The database stores one row per reading, so adding a
 signal needs no schema change. Analysis wants one column per signal. The
@@ -255,6 +257,80 @@ reshape happens in pandas rather than SQL: Postgres can pivot, but it needs
 an extension and the column names must be hardcoded, whereas `DataFrame.pivot`
 discovers them from the data. The general rule is to filter and aggregate in
 SQL, where the indexes are, and do shape manipulation in pandas.
+
+## Anomaly detection
+
+![Detector comparison](docs/anomaly_comparison.png)
+
+Four things get conflated constantly, and this project only does the first
+two:
+
+- **Anomaly detection** — this data is statistically unlike the rest. Says
+  nothing about cause. A cold start looks anomalous; so does a failing sensor.
+- **Fault detection** — a specific known-bad condition occurred. The DTC
+  engine does this: coolant above 110 °C is a defined fault with a defined
+  threshold.
+- **Predictive maintenance** — this component will likely fail within N
+  hours. Needs historical failure data across many vehicles. Not done here.
+- **Mechanical diagnosis** — naming the failed part. Needs physical
+  inspection or a model of the failure mode. Not done here.
+
+`python/anomaly.py` implements three detectors and compares them rather than
+picking one on faith.
+
+**Z-score** measures distance from the mean in standard deviations. Simple
+and interpretable, but it assumes roughly normal data and suffers from
+*masking*: the outliers inflate the very standard deviation used to judge
+them.
+
+**Modified z-score** uses the median and median absolute deviation instead.
+A median barely moves when a minority of samples go extreme, so the baseline
+stays anchored to healthy data.
+
+**Rolling z-score** compares each point to the preceding 200 samples rather
+than to the whole session, and excludes the current point from its own
+baseline.
+
+### The comparison
+
+Two sessions, identical except for how long the injected 200 °C fault lasted.
+CoolantTemp's true anomaly count is known exactly, because the fault was
+injected deliberately; the other three signals should be clean.
+
+| Fault length | z-score | modified z | rolling z |
+|---|---|---|---|
+| 200 of 3000 samples (6.7%) | 200 ✓ | 200 ✓ | 131, plus 48 false positives |
+| 1000 of 3000 samples (33%) | **0** ✗ | 1000 ✓ | 114, plus 48 false positives |
+
+**Z-score fails completely on the longer fault.** Predicted before running
+it, from the arithmetic: as the fault lengthens, the mean rises toward the
+fault value *and* the distribution becomes bimodal, so the standard
+deviation rises too. Both changes shrink the score. At 33% contamination
+z falls to about 1.4, below the threshold of 3, and the detector reports all
+clear. That is masking, and it is the worst failure mode a detector can
+have — silence rather than an error.
+
+**Modified z-score is unaffected**, because the median of a 2:1 split still
+sits in the healthy cluster.
+
+**Rolling z-score is worse on both counts.** It misses samples because once
+the fault has run for a full window, the window *is* the fault and the local
+baseline has moved. Its false positives land on ThrottlePos and EngineLoad
+during the steep parts of the drive cycle's sine wave, where a short window
+has a small spread while the signal is moving fast — a small denominator
+against a real numerator.
+
+**Conclusion: use the modified z-score.** Not because it is the most
+sophisticated, but because it is the only one of the three that survived
+both cases.
+
+### What this does not show
+
+Every one of these detectors found a fault that was injected on purpose into
+simulated data, with the ground truth known in advance. On real vehicle data
+there would be no labels, thresholds would need tuning against observed fault
+rates, and entirely normal behaviour — a cold start, an aggressive driver, a
+cold morning — would look anomalous without anything being wrong.
 
 ## Investigation: ingestion lag
 
@@ -352,6 +428,11 @@ written and `ended_at` being set.
 **Parameterised queries throughout.** Values are sent separately from the
 SQL text, so they can never be interpreted as SQL. The multi-row INSERT
 builds placeholder text dynamically but never interpolates a value.
+
+**Detectors evaluated, not assumed.** The anomaly-detection methods were
+compared against a known ground truth across two contamination levels, and
+the simplest one was rejected on evidence rather than kept because it looked
+reasonable.
 
 ## Performance
 
@@ -494,8 +575,9 @@ python dashboard/app.py
 Analyse a stored session:
 
 ```bash
-pip install pandas
-python python/analyse.py <session_id>
+pip install pandas numpy
+python python/analyse.py <session_id>    # statistics and ingestion lag
+python python/anomaly.py <session_id>    # detector comparison
 ```
 
 Built with `-Wall -Wextra -Werror`. The connection string is read from
@@ -518,6 +600,12 @@ Built with `-Wall -Wextra -Werror`. The connection string is read from
   enforceable at this sample rate.
 - The DTC engine detects threshold conditions in telemetry. It does not
   diagnose mechanical faults and makes no predictive claims.
+- Anomaly detection was evaluated only against deliberately injected faults
+  in simulated data, where the ground truth is known by construction. No
+  claim is made about performance on real telemetry, where thresholds would
+  need tuning and normal-but-unusual behaviour would produce false positives.
+- The detectors run offline over completed sessions. Nothing feeds their
+  output back into the live pipeline or the dashboard.
 - Schema changes are applied by hand. There is no migration tool, so adding
   `vehicle_time` meant an `ALTER TABLE` against the running database and a
   separate edit to `schema.sql`, which a real project would keep in one
@@ -542,10 +630,11 @@ Built with `-Wall -Wextra -Werror`. The connection string is read from
   entirely would need a real-time scheduler, which a general-purpose OS does
   not provide.
 
-## Planned
+## Possible extensions
 
-Statistical anomaly detection over stored sessions, and historical charts on
-the dashboard.
+Historical charts on the dashboard, anomaly results written back to the
+database and surfaced live, CAN FD support, and a SocketCAN backend so the
+decoder could read a real bus.
 
 ## Repository layout
 
@@ -555,7 +644,7 @@ src/                implementation
 tests/              Catch2 test suite
 database/           schema and seed SQL
 dashboard/          Flask API, static page, requirements
-python/             offline analytics
+python/             offline analytics and anomaly detection
 docker/             Dockerfiles for the pipeline and dashboard
 docs/               protocol specification and screenshots
 .github/workflows/  CI configuration
