@@ -4,6 +4,7 @@
 #include "can_decode.hpp"
 #include "frame_builder.hpp"
 #include "dtc_engine.hpp"
+#include <random>
 
 using Catch::Matchers::WithinAbs;
 
@@ -67,4 +68,26 @@ TEST_CASE("DTC requires sustained condition before confirming") {
         // still faulting, but the state has not changed
         CHECK(dtc.update(hot, 0.10).empty());
     }
+}
+
+TEST_CASE("decoder survives arbitrary payloads") {
+    std::mt19937 rng(12345);                    // fixed seed: reproducible
+    std::uniform_int_distribution<int> byte(0, 255);
+    std::uniform_int_distribution<int> id(0, 0x7FF);
+    std::uniform_int_distribution<int> dlc(0, 8);
+
+    for (int n = 0; n < 10000; n++) {
+        CanFrame f{};
+        f.id  = static_cast<uint32_t>(id(rng));
+        f.dlc = static_cast<uint8_t>(dlc(rng));
+        for (auto& b : f.data) b = static_cast<uint8_t>(byte(rng));
+
+        // No assertion on the result: garbage in, anything out is fine.
+        // What must hold is that this returns at all, without crashing
+        // or reading past the end of the payload.
+        auto result = decode_frame(f);
+        (void)result;
+    }
+
+    SUCCEED("10,000 random frames decoded without crashing");
 }

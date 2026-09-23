@@ -1,0 +1,13 @@
+/home/harsh/vehicle-telemetry/build-asan/CMakeFiles/encode_test.dir
+/home/harsh/vehicle-telemetry/build-asan/CMakeFiles/unit_tests.dir
+/home/harsh/vehicle-telemetry/build-asan/CMakeFiles/test.dir
+/home/harsh/vehicle-telemetry/build-asan/CMakeFiles/edit_cache.dir
+/home/harsh/vehicle-telemetry/build-asan/CMakeFiles/rebuild_cache.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/CMakeFiles/test.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/CMakeFiles/edit_cache.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/CMakeFiles/rebuild_cache.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/src/CMakeFiles/Catch2.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/src/CMakeFiles/Catch2WithMain.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/src/CMakeFiles/test.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/src/CMakeFiles/edit_cache.dir
+/home/harsh/vehicle-telemetry/build-asan/_deps/catch2-build/src/CMakeFiles/rebuild_cache.dir
