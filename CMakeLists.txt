@@ -8,6 +8,7 @@ add_compile_options(-Wall -Wextra -Werror)
 
 find_package(Threads REQUIRED)
 
+# ---------------------------------------------------------------- pipeline
 add_executable(encode_test
     src/main.cpp
     src/signal_encode.cpp
@@ -21,11 +22,22 @@ add_executable(encode_test
     src/dtc_engine.cpp
     src/telemetry_writer.cpp
 )
-target_link_libraries(encode_test PRIVATE pqxx pq)
 target_include_directories(encode_test PRIVATE include)
-target_link_libraries(encode_test PRIVATE Threads::Threads)
+target_link_libraries(encode_test PRIVATE Threads::Threads pqxx pq)
 
-add_executable(test_decode
+# ---------------------------------------------------------------- tests
+# FetchContent downloads and builds Catch2 at configure time, so nobody
+# has to install it first and CI needs no extra steps.
+include(FetchContent)
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG        v3.7.1
+)
+FetchContent_MakeAvailable(Catch2)
+
+# The test binary links only what it exercises: no database, no threads.
+add_executable(unit_tests
     tests/test_decode.cpp
     src/can_decode.cpp
     src/signal_table.cpp
@@ -35,4 +47,8 @@ add_executable(test_decode
     src/rate_validator.cpp
     src/dtc_engine.cpp
 )
-target_include_directories(test_decode PRIVATE include)
+target_include_directories(unit_tests PRIVATE include)
+target_link_libraries(unit_tests PRIVATE Catch2::Catch2WithMain)
+
+enable_testing()
+add_test(NAME unit_tests COMMAND unit_tests)

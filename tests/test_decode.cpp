@@ -1,32 +1,40 @@
-#include <cassert>
-#include <cstdio>
-#include <cmath>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
 #include "can_decode.hpp"
 #include "frame_builder.hpp"
 
-// "==" is inaccurate and unreliable
-static bool close_enough(double a, double b, double tol) {
-    return std::fabs(a - b) < tol;
-}
+using Catch::Matchers::WithinAbs;
 
-int main() {
-    // Round trip: encode known values, decode them back
+TEST_CASE("engine frame round-trips through encode and decode") {
     CanFrame f = build_engine_data(2000.0, 50.0, 20.0, 65.0);
     auto d = decode_frame(f);
-    assert(d.has_value());
-    assert(close_enough(d.value()["EngineRPM"], 2000.0, 0.25));
-    assert(close_enough(d.value()["CoolantTemp"], 65.0, 1.0));
 
-    // Unknown ID is rejected
-    CanFrame bad = f;
-    bad.id = 0x999;
-    assert(!decode_frame(bad).has_value());
+    REQUIRE(d.has_value());
 
-    // Wrong DLC is rejected
-    CanFrame short_frame = f;
-    short_frame.dlc = 4;
-    assert(!decode_frame(short_frame).has_value());
+    // Tolerances are one quantisation step: factor 0.25 for RPM,
+    // 0.4 for the percentages, 1.0 for coolant.
+    CHECK_THAT(d->at("EngineRPM"),   WithinAbs(2000.0, 0.25));
+    CHECK_THAT(d->at("ThrottlePos"), WithinAbs(50.0,   0.4));
+    CHECK_THAT(d->at("EngineLoad"),  WithinAbs(20.0,   0.4));
+    CHECK_THAT(d->at("CoolantTemp"), WithinAbs(65.0,   1.0));
+}
 
-    printf("all tests passed\n");
-    return 0;
+TEST_CASE("malformed frames are rejected") {
+    CanFrame f = build_engine_data(2000.0, 50.0, 20.0, 65.0);
+
+    SECTION("unknown identifier") {
+        f.id = 0x999;
+        CHECK_FALSE(decode_frame(f).has_value());
+    }
+
+    SECTION("DLC shorter than the spec") {
+        f.dlc = 4;
+        CHECK_FALSE(decode_frame(f).has_value());
+    }
+
+    SECTION("DLC longer than the spec") {
+        f.dlc = 9;
+        CHECK_FALSE(decode_frame(f).has_value());
+    }
 }
