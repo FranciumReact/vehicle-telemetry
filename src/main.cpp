@@ -42,7 +42,7 @@ int main() {
             // second frame — interleaving good and bad frames would reset
             // the DTC engine's fail counter every other cycle, so it would
             // never confirm.
-            double coolant = (i >= 1500 && i < 1700) ? 200.0 : s.coolant_c;
+            double coolant = (i >= 1000 && i < 2000) ? 200.0 : s.coolant_c;
 
             q.push(build_engine_data(s.rpm, s.throttle_pct,
                                      s.load_pct, coolant));
